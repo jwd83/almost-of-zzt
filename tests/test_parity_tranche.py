@@ -310,3 +310,54 @@ def test_centi_head_handles_non_unit_child_deltas_without_crash() -> None:
 
     assert 0 <= e.room.objs[head].x <= c.XS + 1
     assert 0 <= e.room.objs[head].y <= c.YS + 1
+
+
+def test_read_control_drops_stale_move_queue_when_direction_held(monkeypatch) -> None:
+    class _Pressed:
+        def __init__(self, held: set[int]) -> None:
+            self.held = held
+
+        def __getitem__(self, key: int) -> bool:
+            return key in self.held
+
+    e = _engine()
+    e.move_queue.append((1, 0, False))
+
+    monkeypatch.setattr(pygame.key, "get_pressed", lambda: _Pressed({pygame.K_LEFT}))
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
+    e._read_control()
+
+    assert e.control.dx == -1
+    assert e.control.dy == 0
+    assert not e.move_queue
+
+    monkeypatch.setattr(pygame.key, "get_pressed", lambda: _Pressed(set()))
+    e._read_control()
+
+    assert e.control.dx == 0
+    assert e.control.dy == 0
+
+
+def test_tick_game_processes_each_due_tick_step() -> None:
+    e = _engine()
+    e.play_mode = c.PLAYER
+    e.standby = False
+    e.game_cycle_ms = 20
+    e.cycle_last_ms = 0
+    e.counter = 1
+    e.room.objs[0].cycle = 1
+
+    updates: list[int] = []
+    read_calls = 0
+
+    def fake_read_control() -> None:
+        nonlocal read_calls
+        read_calls += 1
+
+    e._read_control = fake_read_control  # type: ignore[method-assign]
+    e.invoke_update = lambda idx: updates.append(idx)  # type: ignore[method-assign]
+
+    e._tick_game(100)
+
+    assert read_calls == 5
+    assert updates == [0, 0, 0, 0, 0]

@@ -33,6 +33,10 @@ class ScrollEntry:
 
 
 class GameEngine:
+    TARGET_RENDER_FPS = 60
+    MAX_MOVE_QUEUE = 8
+    MAX_TICK_CATCHUP = 8
+
     def __init__(self, world) -> None:
         self.constants = c
         self.random = random.Random()
@@ -1908,6 +1912,8 @@ class GameEngine:
                 elif event.key in key_to_dir:
                     dx, dy = key_to_dir[event.key]
                     fire = bool(event.mod & pygame.KMOD_SHIFT)
+                    if len(self.move_queue) >= self.MAX_MOVE_QUEUE:
+                        self.move_queue.popleft()
                     self.move_queue.append((dx, dy, fire))
                 elif event.unicode:
                     self.key_buffer.append(event.unicode)
@@ -1928,7 +1934,10 @@ class GameEngine:
         mods = pygame.key.get_mods()
         fire = bool(mods & pygame.KMOD_SHIFT) and (dx != 0 or dy != 0)
 
-        if dx == 0 and dy == 0 and self.move_queue:
+        if dx != 0 or dy != 0:
+            # Continuous key state wins; clear queued keydown bursts to avoid stale "ghost" moves.
+            self.move_queue.clear()
+        elif self.move_queue:
             dx, dy, fire = self.move_queue.popleft()
 
         key = self.key_buffer.popleft() if self.key_buffer else "\x00"
@@ -1937,6 +1946,16 @@ class GameEngine:
         self.control.dy = dy
         self.control.fire = fire
         self.control.key = key
+
+    def _update_active_objects(self) -> None:
+        self.obj_num = 0
+        while self.obj_num <= self.room.num_objs:
+            if self.obj_num < len(self.room.objs):
+                obj = self.room.objs[self.obj_num]
+                cyc = obj.cycle
+                if cyc != 0 and (self.counter % cyc) == (self.obj_num % cyc):
+                    self.invoke_update(self.obj_num)
+            self.obj_num += 1
 
     def _tick_game(self, now_ms: int) -> None:
         if self.play_mode == c.PLAYER and self.world.inv.strength <= 0:
@@ -1972,27 +1991,21 @@ class GameEngine:
                     self.world.inv.play_flag = True
             return
 
-        while self.obj_num <= self.room.num_objs:
-            if self.obj_num < len(self.room.objs):
-                obj = self.room.objs[self.obj_num]
-                cyc = obj.cycle
-                if cyc != 0 and (self.counter % cyc) == (self.obj_num % cyc):
-                    self.invoke_update(self.obj_num)
-            self.obj_num += 1
+        max_lag_ms = self.game_cycle_ms * self.MAX_TICK_CATCHUP
+        if now_ms - self.cycle_last_ms > max_lag_ms:
+            self.cycle_last_ms = now_ms - max_lag_ms
 
-        steps = 0
-        while now_ms - self.cycle_last_ms >= self.game_cycle_ms and steps < 3:
+        while now_ms - self.cycle_last_ms >= self.game_cycle_ms:
             self.cycle_last_ms += self.game_cycle_ms
-            self.counter += 1
-            if self.counter > 420:
-                self.counter = 1
-            self.obj_num = 0
             self._read_control()
+            self._update_active_objects()
             if self.bot_msg_ticks > 0:
                 self.bot_msg_ticks -= 1
                 if self.bot_msg_ticks <= 0:
                     self.room.room_info.bot_msg = ""
-            steps += 1
+            self.counter += 1
+            if self.counter > 420:
+                self.counter = 1
 
     def run(self) -> None:
         pygame.init()
@@ -2015,7 +2028,7 @@ class GameEngine:
             self._draw_board(self._renderer)
             self._draw_panel(self._renderer)
             pygame.display.flip()
-            self._clock.tick(60)
+            self._clock.tick(self.TARGET_RENDER_FPS)
 
         pygame.quit()
         self._screen = None

@@ -20,3 +20,8 @@ package = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/almost_of_zzt"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
