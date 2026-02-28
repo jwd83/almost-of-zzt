@@ -77,7 +77,9 @@ class OOPRunner:
             if not next_b:
                 return idx
             ch = next_b[0]
-            is_word = (ord("A") <= ch <= ord("Z")) or (ord("0") <= ch <= ord("9")) or ch == ord("_")
+            # Match Pascal LSeek boundary behavior: letters and underscore
+            # continue words; digits do not block a match.
+            is_word = (ord("A") <= ch <= ord("Z")) or ch == ord("_")
             if not is_word:
                 return idx
             pos = idx + 1
@@ -420,7 +422,8 @@ class OOPRunner:
             if self.engine.info[room.board[tx][ty].kind].go_thru:
                 self.engine.move_obj(obj_idx, tx, ty)
                 return True, False, False, idx, False, None
-            return False, False, False, idx, False, None
+            # Pascal uses `goto GetCmd` here to run same-line fallback command.
+            return self._exec_command(obj_idx, tokens, idx)
 
         if cmd == "WALK":
             d, j = self._note_dir(obj_idx, tokens, idx)

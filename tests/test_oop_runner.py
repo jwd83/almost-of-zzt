@@ -109,3 +109,22 @@ def test_oop_bind_alias_propagates_zap_mutation_to_all_bound_objects() -> None:
     e.oop._zap_label(dst, "PING")
 
     assert b"\r'PING" in e.room.objs[src].inside
+
+
+def test_oop_try_fail_executes_inline_fallback_command() -> None:
+    e = _engine()
+    e.room.board[11][10] = BoardCell(c.NORM_WALL, 0x0E)
+    idx = _add_prog(e, 10, 10, b"#TRY E SET FALLBACK\r")
+
+    e.oop.exec_obj(idx)
+
+    assert e.oop.flag_num("FALLBACK") >= 0
+
+
+def test_oop_label_match_treats_digits_as_non_word_boundary_like_pascal() -> None:
+    e = _engine()
+    idx = _add_prog(e, 10, 10, b"@BOT\r#SEND TARGET1\r#END\r:TARGET12\r#SET HIT\r#END\r")
+
+    e.oop.exec_obj(idx)
+
+    assert e.oop.flag_num("HIT") >= 0
