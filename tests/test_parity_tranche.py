@@ -223,3 +223,24 @@ def test_xporter_dynamic_char_clamps_non_unit_direction_values() -> None:
     ch = e._dynamic_char(20, 10, c.XPORTER)
 
     assert ch == ord("|")
+
+
+def test_centi_head_handles_non_unit_child_deltas_without_crash() -> None:
+    e = _engine()
+    head = e.add_obj(2, 2, c.CENTI_H, 0x0F, 2)
+    child = e.add_obj(1, 2, c.CENTI, 0x0F, 2)
+
+    e.room.objs[head].xd = 1
+    e.room.objs[head].yd = 0
+    e.room.objs[head].child = child
+    e.room.objs[head].parent = -1
+
+    e.room.objs[child].parent = head
+    e.room.objs[child].child = -1
+    e.room.objs[child].xd = 99
+    e.room.objs[child].yd = -99
+
+    e.upd_centi_h(head)
+
+    assert 0 <= e.room.objs[head].x <= c.XS + 1
+    assert 0 <= e.room.objs[head].y <= c.YS + 1

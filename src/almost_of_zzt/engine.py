@@ -385,6 +385,9 @@ class GameEngine:
             return True
         return False
 
+    def _in_board(self, x: int, y: int) -> bool:
+        return 0 <= x <= c.XS + 1 and 0 <= y <= c.YS + 1
+
     def signf(self, val: int) -> int:
         return 1 if val > 0 else -1 if val < 0 else 0
 
@@ -852,9 +855,29 @@ class GameEngine:
 
         obj = self.room.objs[n]
         player = self.player
+        obj.xd = self.signf(obj.xd)
+        obj.yd = self.signf(obj.yd)
+
+        def settle_stopped_head() -> None:
+            self.room.board[obj.x][obj.y].kind = c.CENTI
+            obj.parent = -1
+            cur = n
+            while self.room.objs[cur].child > 0:
+                temp = self.room.objs[cur].child
+                self.room.objs[cur].child = self.room.objs[cur].parent
+                self.room.objs[cur].parent = temp
+                cur = temp
+            self.room.objs[cur].child = self.room.objs[cur].parent
+            tail = self.room.objs[cur]
+            if self._in_board(tail.x, tail.y):
+                self.room.board[tail.x][tail.y].kind = c.CENTI_H
 
         def can_step(dx: int, dy: int) -> bool:
-            kind = self.room.board[obj.x + dx][obj.y + dy].kind
+            tx = obj.x + dx
+            ty = obj.y + dy
+            if not self._in_board(tx, ty):
+                return False
+            kind = self.room.board[tx][ty].kind
             return self.info[kind].go_thru or kind == c.PLAYER
 
         if obj.x == player.x and self.random.randrange(10) < obj.intel:
@@ -883,25 +906,21 @@ class GameEngine:
                         obj.yd = 0
 
         if obj.xd == 0 and obj.yd == 0:
-            self.room.board[obj.x][obj.y].kind = c.CENTI
-            obj.parent = -1
-            cur = n
-            while self.room.objs[cur].child > 0:
-                temp = self.room.objs[cur].child
-                self.room.objs[cur].child = self.room.objs[cur].parent
-                self.room.objs[cur].parent = temp
-                cur = temp
-            self.room.objs[cur].child = self.room.objs[cur].parent
-            tail = self.room.objs[cur]
-            self.room.board[tail.x][tail.y].kind = c.CENTI_H
+            settle_stopped_head()
             return
 
         target_x = obj.x + obj.xd
         target_y = obj.y + obj.yd
+        if not self._in_board(target_x, target_y):
+            obj.xd = 0
+            obj.yd = 0
+            settle_stopped_head()
+            return
         if self.room.board[target_x][target_y].kind == c.PLAYER:
             if obj.child > 0 and obj.child < len(self.room.objs):
                 child = self.room.objs[obj.child]
-                self.room.board[child.x][child.y].kind = c.CENTI_H
+                if self._in_board(child.x, child.y):
+                    self.room.board[child.x][child.y].kind = c.CENTI_H
                 child.xd = obj.xd
                 child.yd = obj.yd
             self.zap_with(n, target_x, target_y)
@@ -912,13 +931,15 @@ class GameEngine:
         cur = n
         while cur != -1 and cur < len(self.room.objs):
             cur_obj = self.room.objs[cur]
-            temp_x = cur_obj.x - cur_obj.xd
-            temp_y = cur_obj.y - cur_obj.yd
-            dx = cur_obj.xd
-            dy = cur_obj.yd
+            dx = self.signf(cur_obj.xd)
+            dy = self.signf(cur_obj.yd)
+            temp_x = cur_obj.x - dx
+            temp_y = cur_obj.y - dy
 
             if cur_obj.child < 0:
                 for cx, cy in ((temp_x - dx, temp_y - dy), (temp_x - dy, temp_y - dx), (temp_x + dy, temp_y + dx)):
+                    if not self._in_board(cx, cy):
+                        continue
                     if self.room.board[cx][cy].kind != c.CENTI:
                         continue
                     candidate = self.obj_at(cx, cy)
@@ -931,9 +952,10 @@ class GameEngine:
                 child.parent = cur
                 child.intel = cur_obj.intel
                 child.rate = cur_obj.rate
-                child.xd = temp_x - child.x
-                child.yd = temp_y - child.y
-                self.move_obj(cur_obj.child, temp_x, temp_y)
+                child.xd = self.signf(temp_x - child.x)
+                child.yd = self.signf(temp_y - child.y)
+                if self._in_board(temp_x, temp_y):
+                    self.move_obj(cur_obj.child, temp_x, temp_y)
 
             cur = cur_obj.child
 
