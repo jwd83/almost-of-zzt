@@ -210,3 +210,16 @@ def test_touch_bound_moves_player_into_adjacent_room_entry() -> None:
     assert e.world.inv.room == 1
     assert (e.player.x, e.player.y) == (1, 10)
     assert dxy == [0, 0]
+
+
+def test_xporter_dynamic_char_clamps_non_unit_direction_values() -> None:
+    e = _engine()
+    idx = e.add_obj(20, 10, c.XPORTER, 0x0F, 1)
+    o = e.room.objs[idx]
+    o.xd = 9
+    o.yd = -7
+    e.counter = 3
+
+    ch = e._dynamic_char(20, 10, c.XPORTER)
+
+    assert ch == ord("|")

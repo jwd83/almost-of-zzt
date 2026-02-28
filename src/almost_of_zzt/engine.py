@@ -1421,9 +1421,12 @@ class GameEngine:
                 o = self.room.objs[idx]
                 h = "^~^-v_v-"
                 v = "(<(|)>)|"
+                xd = self.signf(o.xd)
+                yd = self.signf(o.yd)
+                phase = (self.counter // max(1, o.cycle)) % 4
                 if o.xd == 0:
-                    return ord(h[o.yd * 2 + 3 + ((self.counter // max(1, o.cycle)) % 4)])
-                return ord(v[o.xd * 2 + 3 + ((self.counter // max(1, o.cycle)) % 4)])
+                    return ord(h[yd * 2 + 3 + phase - 1])
+                return ord(v[xd * 2 + 3 + phase - 1])
             return 0xC5
         if kind == c.SBOMB:
             seq = (0xB3, ord("/"), 0xC4, ord("\\"))
