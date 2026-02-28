@@ -1,0 +1,22 @@
+[project]
+name = "almost-of-zzt"
+version = "0.1.0"
+description = "Pygame-ce port of the Pascal ZZT runtime"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "pygame-ce>=2.5.6",
+]
+
+[project.scripts]
+almost-of-zzt = "almost_of_zzt.__main__:main"
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/almost_of_zzt"]
