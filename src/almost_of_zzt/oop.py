@@ -651,12 +651,12 @@ class OOPRunner:
 
                 if halt:
                     if room.objs[obj_idx].offset < 0:
-                        return
-                    if room.objs[obj_idx].offset == 0:
+                        ofs = len(buf)
+                    elif room.objs[obj_idx].offset == 0:
                         ofs = 0
                     else:
                         room.objs[obj_idx].offset = ofs
-                    return
+                    break
 
                 if redo:
                     room.objs[obj_idx].offset = start_ofs
@@ -677,4 +677,20 @@ class OOPRunner:
             room.objs[obj_idx].offset = ofs
 
         if text_lines:
-            self.engine.put_bot_msg(200, text_lines[0][:58])
+            if len(text_lines) == 1:
+                self.engine.put_bot_msg(200, text_lines[0][:58])
+                return
+
+            dialog_title = title or "Interaction"
+            if buf.startswith(b"@"):
+                first_cr = buf.find(b"\r")
+                if first_cr < 0:
+                    first_cr = len(buf)
+                name = buf[1:first_cr].decode("cp437", errors="replace").strip()
+                if name:
+                    dialog_title = name
+
+            cmd = self.engine.show_scroll(text_lines, dialog_title, obj_flag=True)
+            if cmd:
+                if self.lsend_msg(obj_idx, cmd, ignore_lock=False):
+                    self.exec_obj(obj_idx, dialog_title)

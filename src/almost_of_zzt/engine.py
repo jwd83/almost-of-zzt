@@ -23,6 +23,14 @@ class ControlState:
     key: str = "\x00"
 
 
+@dataclass(slots=True)
+class ScrollEntry:
+    raw: str
+    text: str
+    kind: str
+    command: str | None = None
+
+
 class GameEngine:
     def __init__(self, world) -> None:
         self.constants = c
@@ -44,6 +52,9 @@ class GameEngine:
         self.key_buffer: deque[str] = deque()
         self.move_queue: deque[tuple[int, int, bool]] = deque()
         self.bot_msg_ticks = 0
+        self._screen: pygame.Surface | None = None
+        self._renderer: Renderer | None = None
+        self._clock: pygame.time.Clock | None = None
 
         self.sound_enabled = True
         self.first_thru = True
@@ -668,10 +679,105 @@ class GameEngine:
             self.zap_with(n, obj.x + dx, obj.y + dy)
 
     def upd_centi_h(self, n: int) -> None:
-        self.upd_enemy(n)
+        if n >= len(self.room.objs):
+            return
+
+        obj = self.room.objs[n]
+        player = self.player
+
+        def can_step(dx: int, dy: int) -> bool:
+            kind = self.room.board[obj.x + dx][obj.y + dy].kind
+            return self.info[kind].go_thru or kind == c.PLAYER
+
+        if obj.x == player.x and self.random.randrange(10) < obj.intel:
+            obj.yd = self.signf(player.y - obj.y)
+            obj.xd = 0
+        elif obj.y == player.y and self.random.randrange(10) < obj.intel:
+            obj.xd = self.signf(player.x - obj.x)
+            obj.yd = 0
+        elif (self.random.randrange(10) * 4 < obj.rate) or (obj.xd == 0 and obj.yd == 0):
+            obj.xd, obj.yd = self.pick_random_dir()
+
+        if not can_step(obj.xd, obj.yd):
+            old_dx, old_dy = obj.xd, obj.yd
+            temp = obj.yd * (self.random.randrange(2) * 2 - 1)
+            obj.yd = obj.xd * (self.random.randrange(2) * 2 - 1)
+            obj.xd = temp
+            if not can_step(obj.xd, obj.yd):
+                obj.xd = -obj.xd
+                obj.yd = -obj.yd
+                if not can_step(obj.xd, obj.yd):
+                    if can_step(-old_dx, -old_dy):
+                        obj.xd = -old_dx
+                        obj.yd = -old_dy
+                    else:
+                        obj.xd = 0
+                        obj.yd = 0
+
+        if obj.xd == 0 and obj.yd == 0:
+            self.room.board[obj.x][obj.y].kind = c.CENTI
+            obj.parent = -1
+            cur = n
+            while self.room.objs[cur].child > 0:
+                temp = self.room.objs[cur].child
+                self.room.objs[cur].child = self.room.objs[cur].parent
+                self.room.objs[cur].parent = temp
+                cur = temp
+            self.room.objs[cur].child = self.room.objs[cur].parent
+            tail = self.room.objs[cur]
+            self.room.board[tail.x][tail.y].kind = c.CENTI_H
+            return
+
+        target_x = obj.x + obj.xd
+        target_y = obj.y + obj.yd
+        if self.room.board[target_x][target_y].kind == c.PLAYER:
+            if obj.child > 0 and obj.child < len(self.room.objs):
+                child = self.room.objs[obj.child]
+                self.room.board[child.x][child.y].kind = c.CENTI_H
+                child.xd = obj.xd
+                child.yd = obj.yd
+            self.zap_with(n, target_x, target_y)
+            return
+
+        self.move_obj(n, target_x, target_y)
+
+        cur = n
+        while cur != -1 and cur < len(self.room.objs):
+            cur_obj = self.room.objs[cur]
+            temp_x = cur_obj.x - cur_obj.xd
+            temp_y = cur_obj.y - cur_obj.yd
+            dx = cur_obj.xd
+            dy = cur_obj.yd
+
+            if cur_obj.child < 0:
+                for cx, cy in ((temp_x - dx, temp_y - dy), (temp_x - dy, temp_y - dx), (temp_x + dy, temp_y + dx)):
+                    if self.room.board[cx][cy].kind != c.CENTI:
+                        continue
+                    candidate = self.obj_at(cx, cy)
+                    if candidate >= 0 and self.room.objs[candidate].parent < 0:
+                        cur_obj.child = candidate
+                        break
+
+            if cur_obj.child > 0 and cur_obj.child < len(self.room.objs):
+                child = self.room.objs[cur_obj.child]
+                child.parent = cur
+                child.intel = cur_obj.intel
+                child.rate = cur_obj.rate
+                child.xd = temp_x - child.x
+                child.yd = temp_y - child.y
+                self.move_obj(cur_obj.child, temp_x, temp_y)
+
+            cur = cur_obj.child
 
     def upd_centi(self, n: int) -> None:
-        return
+        if n >= len(self.room.objs):
+            return
+        obj = self.room.objs[n]
+        if obj.parent < 0:
+            if obj.parent < -1:
+                self.room.board[obj.x][obj.y].kind = c.CENTI_H
+            else:
+                obj.parent -= 1
 
     def upd_bullet(self, n: int) -> None:
         if n >= len(self.room.objs):
@@ -901,19 +1007,28 @@ class GameEngine:
         dst_x = obj.x - obj.xd
         dst_y = obj.y - obj.yd
 
-        if self.room.board[dst_x][dst_y].kind != c.EMPTY:
-            self.push(dst_x, dst_y, -obj.xd, -obj.yd)
+        if self.room.board[dst_x][dst_y].kind == c.PLAYER:
+            dxy = [self.control.dx, self.control.dy]
+            self.invoke_touch(src_x, src_y, 0, dxy)
+        else:
+            if self.room.board[dst_x][dst_y].kind != c.EMPTY:
+                self.push(dst_x, dst_y, -obj.xd, -obj.yd)
 
-        if self.room.board[dst_x][dst_y].kind == c.EMPTY:
-            temp_obj = self.obj_at(src_x, src_y)
-            if temp_obj > 0:
-                if len(self.room.objs) - 1 < c.MAX_OBJS:
-                    src_obj = self.room.objs[temp_obj]
-                    idx = self.add_obj(dst_x, dst_y, self.room.board[src_x][src_y].kind, self.room.board[src_x][src_y].color, src_obj.cycle, src_obj)
-                    if idx > 0:
-                        self.room.objs[idx].inside = src_obj.inside
-            elif temp_obj < 0:
-                self.room.board[dst_x][dst_y] = copy.deepcopy(self.room.board[src_x][src_y])
+            if self.room.board[dst_x][dst_y].kind == c.EMPTY:
+                temp_obj = self.obj_at(src_x, src_y)
+                if temp_obj > 0:
+                    if len(self.room.objs) - 1 < (c.MAX_OBJS + 24):
+                        src_obj = self.room.objs[temp_obj]
+                        self.add_obj(
+                            dst_x,
+                            dst_y,
+                            self.room.board[src_x][src_y].kind,
+                            self.room.board[src_x][src_y].color,
+                            src_obj.cycle,
+                            src_obj,
+                        )
+                elif temp_obj != 0:
+                    self.room.board[dst_x][dst_y] = copy.deepcopy(self.room.board[src_x][src_y])
 
         obj.cycle = (9 - obj.rate) * 3
 
@@ -1040,29 +1155,66 @@ class GameEngine:
             self.room.board[o.x][o.y].color = 0x09
 
     def upd_blink_wall(self, n: int) -> None:
-        # Simplified blink wall: toggles one segment in front of emitter.
         if n >= len(self.room.objs):
             return
         o = self.room.objs[n]
         if o.room == 0:
             o.room = o.intel + 1
-        if o.room > 1:
-            o.room -= 1
-            return
+        if o.room == 1:
+            temp_x = o.x + o.xd
+            temp_y = o.y + o.yd
+            wall_kind = c.HORIZ_WALL if o.xd != 0 else c.VERT_WALL
 
-        tx, ty = o.x + o.xd, o.y + o.yd
-        wall_kind = c.HORIZ_WALL if o.xd else c.VERT_WALL
-        if self.room.board[tx][ty].kind == wall_kind and self.room.board[tx][ty].color == self.room.board[o.x][o.y].color:
-            self.room.board[tx][ty].kind = c.EMPTY
+            while (
+                self.room.board[temp_x][temp_y].kind == wall_kind
+                and self.room.board[temp_x][temp_y].color == self.room.board[o.x][o.y].color
+            ):
+                self.room.board[temp_x][temp_y].kind = c.EMPTY
+                temp_x += o.xd
+                temp_y += o.yd
+                o.room = o.rate * 2 + 1
+
+            if temp_x == o.x + o.xd and temp_y == o.y + o.yd:
+                done = False
+                limit = (c.XS + c.YS) * 2
+                while not done and limit > 0:
+                    limit -= 1
+                    kind = self.room.board[temp_x][temp_y].kind
+                    if kind != c.EMPTY and self.info[kind].killable:
+                        self.zap(temp_x, temp_y)
+
+                    if self.room.board[temp_x][temp_y].kind == c.PLAYER:
+                        player_idx = self.obj_at(temp_x, temp_y)
+                        if player_idx >= 0:
+                            if o.xd != 0:
+                                if self.room.board[temp_x][temp_y - 1].kind == c.EMPTY:
+                                    self.move_obj(player_idx, temp_x, temp_y - 1)
+                                elif self.room.board[temp_x][temp_y + 1].kind == c.EMPTY:
+                                    self.move_obj(player_idx, temp_x, temp_y + 1)
+                            else:
+                                if self.room.board[temp_x + 1][temp_y].kind == c.EMPTY:
+                                    self.move_obj(player_idx, temp_x + 1, temp_y)
+                                elif self.room.board[temp_x - 1][temp_y].kind == c.EMPTY:
+                                    # Intentionally mirrors the original Pascal behavior.
+                                    self.move_obj(player_idx, temp_x + 1, temp_y)
+
+                        if self.room.board[temp_x][temp_y].kind == c.PLAYER:
+                            while self.world.inv.strength > 0:
+                                self.zap_obj(0)
+                            done = True
+
+                    if self.room.board[temp_x][temp_y].kind == c.EMPTY:
+                        self.room.board[temp_x][temp_y].kind = wall_kind
+                        self.room.board[temp_x][temp_y].color = self.room.board[o.x][o.y].color
+                    else:
+                        done = True
+
+                    temp_x += o.xd
+                    temp_y += o.yd
+
+                o.room = o.rate * 2 + 1
         else:
-            if self.room.board[tx][ty].kind == c.PLAYER:
-                self.zap_obj(0)
-            elif self.info[self.room.board[tx][ty].kind].killable:
-                self.zap(tx, ty)
-            if self.room.board[tx][ty].kind == c.EMPTY:
-                self.room.board[tx][ty].kind = wall_kind
-                self.room.board[tx][ty].color = self.room.board[o.x][o.y].color
-        o.room = o.rate * 2 + 1
+            o.room -= 1
 
     def _dynamic_char(self, x: int, y: int, kind: int) -> int:
         if kind == c.SHOOTER:
@@ -1214,6 +1366,153 @@ class GameEngine:
             start = max(0, (c.XS - len(text)) // 2)
             renderer.draw_text(start, c.YS - 2, text, 0x1F)
 
+    def _parse_scroll_entries(self, lines: list[str]) -> list[ScrollEntry]:
+        entries: list[ScrollEntry] = []
+        for raw in lines:
+            if not raw:
+                entries.append(ScrollEntry(raw="", text="", kind="text"))
+                continue
+            if raw[0] == "!":
+                rest = raw[1:]
+                if ";" in rest:
+                    cmd, text = rest.split(";", 1)
+                else:
+                    cmd, text = rest, rest
+                entries.append(ScrollEntry(raw=raw, text=text, kind="hyper", command=cmd.strip()))
+            elif raw[0] == ":":
+                rest = raw[1:]
+                if ";" in rest:
+                    _, text = rest.split(";", 1)
+                else:
+                    text = ""
+                entries.append(ScrollEntry(raw=raw, text=text, kind="label"))
+            elif raw[0] == "$":
+                entries.append(ScrollEntry(raw=raw, text=raw[1:], kind="heading"))
+            else:
+                entries.append(ScrollEntry(raw=raw, text=raw, kind="text"))
+        return entries
+
+    def _draw_scroll_overlay(
+        self,
+        renderer: Renderer,
+        title: str,
+        entries: list[ScrollEntry],
+        cur: int,
+        obj_flag: bool,
+    ) -> None:
+        x0, y0 = 5, 3
+        w, h = 52, 18
+        visible = h - 4
+        top_idx = max(0, min(cur - visible // 2, max(0, len(entries) - visible)))
+
+        for y in range(y0, y0 + h):
+            for x in range(x0, x0 + w):
+                renderer.draw_glyph(x, y, ord(" "), 0x1E)
+
+        for x in range(x0 + 1, x0 + w - 1):
+            renderer.draw_glyph(x, y0, 0xCD, 0x0F)
+            renderer.draw_glyph(x, y0 + h - 1, 0xCD, 0x0F)
+        for y in range(y0 + 1, y0 + h - 1):
+            renderer.draw_glyph(x0, y, 0xBA, 0x0F)
+            renderer.draw_glyph(x0 + w - 1, y, 0xBA, 0x0F)
+        renderer.draw_glyph(x0, y0, 0xC9, 0x0F)
+        renderer.draw_glyph(x0 + w - 1, y0, 0xBB, 0x0F)
+        renderer.draw_glyph(x0, y0 + h - 1, 0xC8, 0x0F)
+        renderer.draw_glyph(x0 + w - 1, y0 + h - 1, 0xBC, 0x0F)
+
+        title_text = title[: w - 4]
+        title_x = x0 + max(1, (w - len(title_text)) // 2)
+        renderer.draw_text(title_x, y0 + 1, title_text, 0x1E)
+
+        for row in range(visible):
+            idx = top_idx + row
+            if idx >= len(entries):
+                break
+            entry = entries[idx]
+            y = y0 + 2 + row
+            base_attr = 0x1E
+            if entry.kind in {"hyper", "label", "heading"}:
+                base_attr = 0x1F
+            if idx == cur:
+                base_attr = 0x1C
+
+            if entry.kind == "heading":
+                text = entry.text[: w - 4].center(w - 4)
+            elif entry.kind == "hyper":
+                text = "  " + entry.text
+            else:
+                text = entry.text
+            text = text[: w - 4]
+            renderer.draw_text(x0 + 2, y, text.ljust(w - 4), base_attr)
+            if entry.kind == "hyper":
+                renderer.draw_glyph(x0 + 2, y, 0x10, base_attr)
+
+        hint = "Enter selects" if obj_flag else "Enter continues"
+        renderer.draw_text(x0 + 2, y0 + h - 2, f"{hint}  Esc closes"[: w - 4], 0x1A)
+
+    def show_scroll(self, lines: list[str], title: str, obj_flag: bool = True) -> str | None:
+        entries = self._parse_scroll_entries(lines)
+        if not entries:
+            return None
+
+        if self._renderer is None or self._screen is None:
+            for entry in entries:
+                if entry.text.strip():
+                    self.put_bot_msg(200, entry.text[:58])
+                    break
+            return None
+
+        cur = 0
+        for i, entry in enumerate(entries):
+            if entry.kind != "label":
+                cur = i
+                break
+
+        clock = self._clock or pygame.time.Clock()
+        result: str | None = None
+
+        while not self.exit_program:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.exit_program = True
+                    break
+                if event.type != pygame.KEYDOWN:
+                    continue
+                if event.key in (pygame.K_ESCAPE,):
+                    self.key_buffer.clear()
+                    self.move_queue.clear()
+                    return None
+                if event.key in (pygame.K_UP, pygame.K_KP8):
+                    cur = max(0, cur - 1)
+                elif event.key in (pygame.K_DOWN, pygame.K_KP2):
+                    cur = min(len(entries) - 1, cur + 1)
+                elif event.key == pygame.K_PAGEUP:
+                    cur = max(0, cur - 12)
+                elif event.key == pygame.K_PAGEDOWN:
+                    cur = min(len(entries) - 1, cur + 12)
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_KP_ENTER):
+                    entry = entries[cur]
+                    if entry.kind == "hyper" and entry.command:
+                        if obj_flag:
+                            result = entry.command
+                            self.key_buffer.clear()
+                            self.move_queue.clear()
+                            return result
+                    self.key_buffer.clear()
+                    self.move_queue.clear()
+                    return result
+
+            self._renderer.clear()
+            self._draw_board(self._renderer)
+            self._draw_panel(self._renderer)
+            self._draw_scroll_overlay(self._renderer, title, entries, cur, obj_flag)
+            pygame.display.flip()
+            clock.tick(30)
+
+        self.key_buffer.clear()
+        self.move_queue.clear()
+        return result
+
     def _pump_events(self) -> None:
         key_to_dir: dict[int, tuple[int, int]] = {
             pygame.K_UP: (0, -1),
@@ -1309,9 +1608,9 @@ class GameEngine:
     def run(self) -> None:
         pygame.init()
         pygame.display.set_caption("almost-of-zzt")
-        screen = pygame.display.set_mode((c.SCREEN_W, c.SCREEN_H))
-        renderer = Renderer(screen)
-        clock = pygame.time.Clock()
+        self._screen = pygame.display.set_mode((c.SCREEN_W, c.SCREEN_H))
+        self._renderer = Renderer(self._screen)
+        self._clock = pygame.time.Clock()
 
         self.note_enter_new_room()
 
@@ -1322,10 +1621,13 @@ class GameEngine:
             now = pygame.time.get_ticks()
             self._tick_game(now)
 
-            renderer.clear()
-            self._draw_board(renderer)
-            self._draw_panel(renderer)
+            self._renderer.clear()
+            self._draw_board(self._renderer)
+            self._draw_panel(self._renderer)
             pygame.display.flip()
-            clock.tick(60)
+            self._clock.tick(60)
 
         pygame.quit()
+        self._screen = None
+        self._renderer = None
+        self._clock = None

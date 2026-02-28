@@ -12,8 +12,8 @@ This file tracks behavior where the Python port currently differs from, or infer
 
 ## Known parity gaps
 
-- ZZT-OOP interpreter now supports core command flow (`#IF`, direction modifiers, `#GO/#TRY/#WALK`, `#PUT/#CHANGE/#BECOME`, `#GIVE/#TAKE`, `#SEND/#ZAP/#RESTORE`, `#LOCK/#UNLOCK`, `#CHAR/#CYCLE`, `#DIE/#END/#RESTART/#ENDGAME`) but still lacks full scroll UI behavior and exact error/offset edge-case handling.
-- Blink wall, centipede, duplicator, conveyor, and transporter interactions are implemented but not fully cycle-accurate.
+- ZZT-OOP interpreter now supports core command flow and interactive object scroll command picks (`!LABEL;text`), but still lacks exact parser error handling and some edge-case offset behavior from `LANG.PAS`.
+- Blink wall, centipede, and duplicator logic now follow Pascal control flow more closely; remaining parity gaps are mostly in rare chain/overflow edge-cases and in other actors (conveyor/transporter interactions).
 - Dark-room redraw behavior is approximated by full-frame redraw, not Pascal incremental redraw.
 - Bottom message lifecycle uses a simplified timer, not special object slot semantics.
 - Save/load uses Pascal field layout and room compression but does not preserve raw pointer bytes meaningfully.

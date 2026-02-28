@@ -26,6 +26,7 @@ uv run almost-of-zzt path/to/WORLD.ZZT
 - Original ZZT-style world/save binary formats are supported by `src/almost_of_zzt/world.py`.
 - `S` saves to `SAVED.SAV` in the current working directory.
 - Movement uses arrow keys (or keypad `8/2/4/6`), `Shift+direction` shoots.
+- Scroll/dialog windows use arrows for navigation, `Enter` to continue/select, `Esc` to close.
 - If no world is provided, a small playable demo room is generated.
 
 ## Layout
