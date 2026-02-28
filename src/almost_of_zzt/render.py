@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pygame
 
@@ -24,7 +25,37 @@ class Renderer:
     glyph_cache: dict[tuple[int, int], pygame.Surface] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        self.font = pygame.font.SysFont("Courier New", 14, bold=True)
+        self.font = self._load_font()
+
+    def _load_font(self) -> pygame.font.Font:
+        font_candidates = (
+            "AcPlus_IBM_VGA_8x14.ttf",
+            "AcPlus_IBM_EGA_8x8.ttf",
+            "APL386.ttf",
+        )
+        base = Path(__file__).resolve().parent
+        for name in font_candidates:
+            font_path = base / name
+            if not font_path.is_file():
+                continue
+            fitted = self._load_best_fit_font(font_path)
+            if fitted is not None:
+                return fitted
+        return pygame.font.SysFont("Courier New", c.CELL_H, bold=True)
+
+    def _load_best_fit_font(self, font_path: Path) -> pygame.font.Font | None:
+        for size in range(32, 5, -1):
+            font = pygame.font.Font(str(font_path), size)
+            if self._font_fits_cell(font):
+                return font
+        return None
+
+    def _font_fits_cell(self, font: pygame.font.Font) -> bool:
+        for code in range(256):
+            w, h = font.size(cp437_char(code))
+            if w > c.CELL_W or h > c.CELL_H:
+                return False
+        return True
 
     def draw_glyph(self, col: int, row: int, code: int, attr: int) -> None:
         x = c.BOARD_OFFSET_X + col * c.CELL_W
@@ -35,8 +66,8 @@ class Renderer:
         if surf is None:
             surf = pygame.Surface((c.CELL_W, c.CELL_H))
             surf.fill(bg)
-            glyph = self.font.render(cp437_char(code), True, fg)
-            rect = glyph.get_rect(center=(c.CELL_W // 2, c.CELL_H // 2 + 1))
+            glyph = self.font.render(cp437_char(code), False, fg)
+            rect = glyph.get_rect(center=(c.CELL_W // 2, c.CELL_H // 2))
             surf.blit(glyph, rect)
             self.glyph_cache[key] = surf
         self.screen.blit(surf, (x, y))
