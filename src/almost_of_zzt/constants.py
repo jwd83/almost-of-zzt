@@ -7,6 +7,7 @@ from typing import Final
 GAME_TITLE: Final[str] = "ZZT"
 WORLD_EXT: Final[str] = ".ZZT"
 SAVE_EXT: Final[str] = ".SAV"
+HI_EXT: Final[str] = ".HI"
 
 # Categories
 C_ITEM: Final[int] = 1
@@ -70,6 +71,7 @@ YS: Final[int] = 25
 MAX_OBJS: Final[int] = 150
 MAX_ROOMS: Final[int] = 100
 NUM_FLAGS: Final[int] = 10
+NUM_HI: Final[int] = 30
 HEADER_LEN: Final[int] = 512
 
 TORCH_XS: Final[int] = 8

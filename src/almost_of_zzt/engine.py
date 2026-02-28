@@ -63,6 +63,8 @@ class GameEngine:
         self.entry_room = 0
         self._world_file: Path | None = None
         self._world_origin_file: Path | None = None
+        self._hi_scores: list[tuple[str, int]] = [("", -1) for _ in range(c.NUM_HI)]
+        self._death_score_noted = False
 
         self.oop = OOPRunner(self)
 
@@ -76,6 +78,7 @@ class GameEngine:
 
         self._ensure_player_board()
         self._init_menu_state()
+        self._load_hi_scores()
 
     @property
     def room(self) -> Room:
@@ -196,6 +199,8 @@ class GameEngine:
         self.key_buffer.clear()
         self.move_queue.clear()
         self.bot_msg_ticks = 0
+        self._death_score_noted = False
+        self._load_hi_scores()
         return True
 
     def _start_play(self, reload_original: bool) -> None:
@@ -210,6 +215,156 @@ class GameEngine:
         self.note_enter_new_room()
         self.standby = True
         self.counter = self.random.randrange(100)
+        self.obj_num = self.room.num_objs + 1
+        self._death_score_noted = False
+
+    def _hi_scores_path(self) -> Path | None:
+        name = self.world.inv.orig_name.strip()
+        if not name:
+            return None
+        if self._world_origin_file is not None:
+            return self._world_origin_file.parent / f"{name}{c.HI_EXT}"
+        if self._world_file is not None:
+            return self._world_file.parent / f"{name}{c.HI_EXT}"
+        return Path.cwd() / f"{name}{c.HI_EXT}"
+
+    def _load_hi_scores(self) -> None:
+        self._hi_scores = [("", -1) for _ in range(c.NUM_HI)]
+        path = self._hi_scores_path()
+        if path is None:
+            return
+
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return
+
+        entry_size = 53
+        total_size = entry_size * c.NUM_HI
+        if len(raw) < total_size:
+            return
+
+        loaded: list[tuple[str, int]] = []
+        for idx in range(c.NUM_HI):
+            ofs = idx * entry_size
+            name_len = min(raw[ofs], 50)
+            name = raw[ofs + 1 : ofs + 1 + name_len].decode("cp437", errors="replace")
+            score = int.from_bytes(raw[ofs + 51 : ofs + 53], byteorder="little", signed=True)
+            loaded.append((name, score))
+        self._hi_scores = loaded
+
+    def _save_hi_scores(self) -> None:
+        path = self._hi_scores_path()
+        if path is None:
+            return
+
+        payload = bytearray()
+        for idx in range(c.NUM_HI):
+            name, score = self._hi_scores[idx] if idx < len(self._hi_scores) else ("", -1)
+            enc = name.encode("cp437", errors="replace")[:50]
+            payload.append(len(enc))
+            payload.extend(enc.ljust(50, b"\x00"))
+            payload.extend(int(score).to_bytes(2, byteorder="little", signed=True))
+
+        try:
+            path.write_bytes(bytes(payload))
+        except OSError:
+            self.put_bot_msg(200, f"Could not save {path.name}")
+
+    def _set_view_hi_lines(self) -> list[str]:
+        lines = ["Score  Name", "-----  ----------------------------------"]
+        for name, score in self._hi_scores:
+            if name:
+                lines.append(f"{score:>5}  {name}")
+        return lines
+
+    def _view_hi(self, n: int) -> None:
+        del n  # Maintained for parity with Pascal signature.
+        lines = self._set_view_hi_lines()
+        if len(lines) <= 2:
+            return
+
+        title_name = self.world.inv.orig_name if self.world.inv.orig_name else "Untitled"
+        self.show_scroll(lines, f"High scores for {title_name}", obj_flag=False)
+
+    def _prompt_high_score_name(self, prompt: str) -> str:
+        if self._renderer is None or self._screen is None:
+            return ""
+
+        clock = self._clock or pygame.time.Clock()
+        name = ""
+        max_name_len = 50
+        while not self.exit_program:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.exit_program = True
+                    return ""
+                if event.type != pygame.KEYDOWN:
+                    continue
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.key_buffer.clear()
+                    self.move_queue.clear()
+                    return name
+                if event.key == pygame.K_ESCAPE:
+                    self.key_buffer.clear()
+                    self.move_queue.clear()
+                    return ""
+                if event.key == pygame.K_BACKSPACE:
+                    name = name[:-1]
+                elif event.unicode and event.unicode.isprintable() and event.unicode not in "\r\n\t":
+                    if len(name) < max_name_len:
+                        name += event.unicode
+
+            self._renderer.clear()
+            self._draw_board(self._renderer)
+            self._draw_panel(self._renderer)
+            self._renderer.draw_text(1, c.YS - 2, (" " + prompt)[: c.XS], 0x1F)
+            shown = name if len(name) <= c.XS - 3 else name[-(c.XS - 3) :]
+            self._renderer.draw_text(1, c.YS - 1, ("> " + shown + "_")[: c.XS], 0x1E)
+            pygame.display.flip()
+            clock.tick(30)
+
+        return ""
+
+    def _note_score(self, score: int) -> None:
+        rank = 1
+        while rank <= c.NUM_HI and score < self._hi_scores[rank - 1][1]:
+            rank += 1
+        if rank > c.NUM_HI or score <= 0:
+            return
+
+        for idx in range(c.NUM_HI - 1, rank - 1, -1):
+            self._hi_scores[idx] = self._hi_scores[idx - 1]
+        self._hi_scores[rank - 1] = ("-- You! --", score)
+
+        title_name = self.world.inv.orig_name if self.world.inv.orig_name else "Untitled"
+        self.show_scroll(
+            self._set_view_hi_lines(),
+            f"New high score for {title_name}",
+            obj_flag=False,
+        )
+
+        name = self._prompt_high_score_name("Congratulations!  Enter your name:")
+        self._hi_scores[rank - 1] = (name[:50], score)
+        self._save_hi_scores()
+
+    def _handle_player_death(self) -> None:
+        if self.play_mode != c.PLAYER or self._death_score_noted:
+            return
+        self._death_score_noted = True
+
+        self._load_hi_scores()
+        self._note_score(self.world.inv.score)
+
+        dead_room = self.world.inv.room
+        if 0 <= 0 <= self.world.num_rooms:
+            self.change_room(0)
+        self.entry_room = dead_room
+        self._set_play_mode(c.MONITOR)
+        self.standby = False
+        self.key_buffer.clear()
+        self.move_queue.clear()
+        self.control = ControlState()
         self.obj_num = self.room.num_objs + 1
 
     def _handle_monitor_key(self, key: str) -> None:
@@ -238,7 +393,8 @@ class GameEngine:
             return
 
         if key_u == "H":
-            self.put_bot_msg(180, "High scores are not implemented yet.")
+            self._load_hi_scores()
+            self._view_hi(1)
             return
 
         if key_u == "A":
@@ -1783,6 +1939,10 @@ class GameEngine:
         self.control.key = key
 
     def _tick_game(self, now_ms: int) -> None:
+        if self.play_mode == c.PLAYER and self.world.inv.strength <= 0:
+            self._handle_player_death()
+            return
+
         if self.play_mode == c.MONITOR:
             self._read_control()
             self._handle_monitor_key(self.control.key)

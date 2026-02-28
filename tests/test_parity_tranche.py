@@ -172,6 +172,72 @@ def test_monitor_restore_command_starts_play_mode() -> None:
     assert e.standby is True
 
 
+def test_monitor_high_scores_command_loads_and_views() -> None:
+    e = _engine()
+    calls: list[str] = []
+    e._load_hi_scores = lambda: calls.append("load")  # type: ignore[method-assign]
+    e._view_hi = lambda n: calls.append(f"view:{n}")  # type: ignore[method-assign]
+
+    e._handle_monitor_key("H")
+
+    assert calls == ["load", "view:1"]
+
+
+def test_note_score_persists_hi_file_round_trip(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    e = _engine()
+    e.world.inv.orig_name = "TESTHI"
+    e._world_origin_file = tmp_path / "TESTHI.ZZT"
+    e._load_hi_scores()
+    e.show_scroll = lambda lines, title, obj_flag=True: None  # type: ignore[method-assign]
+    e._prompt_high_score_name = lambda prompt: "Jared"  # type: ignore[method-assign]
+
+    e._note_score(1234)
+
+    hi_path = tmp_path / "TESTHI.HI"
+    assert hi_path.exists()
+    assert hi_path.stat().st_size == c.NUM_HI * 53
+
+    e2 = _engine()
+    e2.world.inv.orig_name = "TESTHI"
+    e2._world_origin_file = tmp_path / "TESTHI.ZZT"
+    e2._load_hi_scores()
+    assert e2._hi_scores[0] == ("Jared", 1234)
+
+
+def test_player_death_notes_score_and_returns_to_monitor(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    world = make_new_world()
+    world.game_name = "TEST"
+    world.rooms.append(make_default_room())
+    world.num_rooms = 1
+    world.inv.room = 1
+    world.inv.orig_name = "DEATHHI"
+
+    e = GameEngine(world)
+    e._world_origin_file = tmp_path / "DEATHHI.ZZT"
+    e.show_scroll = lambda lines, title, obj_flag=True: None  # type: ignore[method-assign]
+    e._prompt_high_score_name = lambda prompt: "Player"  # type: ignore[method-assign]
+    e._set_play_mode(c.PLAYER)
+    e.play_mode = c.PLAYER
+    e.standby = False
+    e.world.inv.score = 77
+    e.world.inv.strength = 0
+
+    e._tick_game(100)
+
+    assert e.play_mode == c.MONITOR
+    assert e.standby is False
+    assert e.world.inv.room == 0
+
+    e2 = _engine()
+    e2.world.inv.orig_name = "DEATHHI"
+    e2._world_origin_file = tmp_path / "DEATHHI.ZZT"
+    e2._load_hi_scores()
+    assert e2._hi_scores[0] == ("Player", 77)
+
+
 def test_standby_moves_off_passage_overlay_cell() -> None:
     e = _engine()
     _set_player(e, 10, 10)
