@@ -66,7 +66,7 @@ class OOPRunner:
             return -1
 
         pat = ("\r" + before + label.upper()).encode("cp437")
-        up = (b"\r" + data.upper())
+        up = data.upper()
         pos = 0
         while True:
             idx = up.find(pat, pos)
@@ -322,6 +322,7 @@ class OOPRunner:
         return True, idx
 
     def _zap_label(self, sender: int, msg: str) -> None:
+        room = self.engine.room
         dest_obj = 0
         while True:
             target = None
@@ -337,22 +338,31 @@ class OOPRunner:
             ofs = self._find_label(dest_obj, label, before=":")
             if ofs < 0:
                 continue
-            data = bytearray(self.engine.room.objs[dest_obj].inside)
+            old_inside = room.objs[dest_obj].inside
+            data = bytearray(old_inside)
             if ofs + 1 < len(data):
                 data[ofs + 1] = ord("'")
-                self.engine.room.objs[dest_obj].inside = bytes(data)
+                new_inside = bytes(data)
+                for obj in room.objs:
+                    if obj.inside is old_inside:
+                        obj.inside = new_inside
 
     def _restore_label(self, sender: int, msg: str) -> None:
+        room = self.engine.room
         label = msg.split(":", 1)[1] if ":" in msg else msg
         for dest_obj in self._iter_targets(sender, msg.split(":", 1)[0] if ":" in msg else "SELF"):
             while True:
                 ofs = self._find_label(dest_obj, label, before="'")
                 if ofs < 0:
                     break
-                data = bytearray(self.engine.room.objs[dest_obj].inside)
+                old_inside = room.objs[dest_obj].inside
+                data = bytearray(old_inside)
                 if ofs + 1 < len(data):
                     data[ofs + 1] = ord(":")
-                    self.engine.room.objs[dest_obj].inside = bytes(data)
+                    new_inside = bytes(data)
+                    for obj in room.objs:
+                        if obj.inside is old_inside:
+                            obj.inside = new_inside
                 else:
                     break
 
@@ -365,7 +375,9 @@ class OOPRunner:
         """Run one command.
 
         Returns tuple:
-        (poll, redo, halt, next_idx, die_flag, die_cell)
+        (poll, redo, halt, next_idx, die_flag, die_cell).
+        next_idx is -1 for commands that changed the sender offset and
+        should continue from that offset (Pascal NewLineF=false behavior).
         """
         room = self.engine.room
         obj = room.objs[obj_idx]
@@ -490,8 +502,24 @@ class OOPRunner:
 
         if cmd == "SEND":
             if idx < len(tokens):
-                self.lsend_msg(obj_idx, tokens[idx], ignore_lock=False)
+                changed_sender = self.lsend_msg(obj_idx, tokens[idx], ignore_lock=False)
                 idx += 1
+                if changed_sender:
+                    return False, False, False, -1, False, None
+            return False, False, False, idx, False, None
+
+        if cmd == "BIND":
+            if idx < len(tokens):
+                target = tokens[idx]
+                idx += 1
+                dest = None
+                for candidate in self._iter_targets(obj_idx, target):
+                    dest = candidate
+                    break
+                if dest is not None:
+                    room.objs[obj_idx].inside = room.objs[dest].inside
+                    room.objs[obj_idx].offset = 0
+                    return False, False, False, -1, False, None
             return False, False, False, idx, False, None
 
         if cmd == "BECOME":
@@ -569,7 +597,13 @@ class OOPRunner:
         if cmd == "DIE":
             return False, False, False, idx, True, BoardCell(c.EMPTY, 0x0F)
 
-        self.lsend_msg(obj_idx, cmd, ignore_lock=False)
+        changed_sender = self.lsend_msg(obj_idx, cmd, ignore_lock=False)
+        if changed_sender:
+            return False, False, False, -1, False, None
+        if ":" not in cmd:
+            room.objs[obj_idx].offset = -1
+            self.engine.put_bot_msg(200, f"ERR: Bad command {cmd}")
+            return False, False, True, idx, False, None
         return False, False, False, idx, False, None
 
     def exec_obj(self, obj_idx: int, title: str = "Interaction") -> None:
@@ -581,15 +615,18 @@ class OOPRunner:
         if obj.offset < 0:
             return
 
-        buf = obj.inside
-        if not buf:
+        if not obj.inside:
             return
 
         ofs = obj.offset
         cmds_exec = 0
         text_lines: list[str] = []
 
-        while 0 <= ofs < len(buf) and cmds_exec <= 32:
+        while cmds_exec <= 32:
+            buf = room.objs[obj_idx].inside
+            if not (0 <= ofs < len(buf)):
+                break
+
             start_ofs = ofs
             next_cr = buf.find(b"\r", ofs)
             if next_cr < 0:
@@ -641,7 +678,7 @@ class OOPRunner:
                 if not tokens:
                     continue
 
-                poll, redo, halt, _, die_flag, die_cell = self._exec_command(obj_idx, tokens, 0)
+                poll, redo, halt, next_idx, die_flag, die_cell = self._exec_command(obj_idx, tokens, 0)
 
                 if die_flag and die_cell is not None:
                     ox, oy = room.objs[obj_idx].x, room.objs[obj_idx].y
@@ -666,11 +703,16 @@ class OOPRunner:
                     room.objs[obj_idx].offset = ofs
                     return
 
+                if next_idx == -1:
+                    ofs = room.objs[obj_idx].offset
+                    continue
+
                 room.objs[obj_idx].offset = ofs
                 continue
 
             text_lines.append(raw)
 
+        buf = room.objs[obj_idx].inside
         if ofs >= len(buf):
             room.objs[obj_idx].offset = -1
         else:

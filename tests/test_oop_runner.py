@@ -66,3 +66,46 @@ def test_oop_take_fail_executes_fallback_command() -> None:
 
     assert e.world.inv.gems == 0
     assert e.world.inv.ammo == 5
+
+
+def test_oop_send_to_self_jumps_to_label_without_running_next_line() -> None:
+    e = _engine()
+    idx = _add_prog(e, 10, 10, b"@BOT\r#SEND TARGET\r#SET WRONG\r#END\r:TARGET\r#SET RIGHT\r#END\r")
+
+    e.oop.exec_obj(idx)
+
+    assert e.oop.flag_num("RIGHT") >= 0
+    assert e.oop.flag_num("WRONG") == -1
+
+
+def test_oop_unknown_bare_command_errors_and_halts_object() -> None:
+    e = _engine()
+    idx = _add_prog(e, 10, 10, b"@BOT\r#NOSUCH\r#SET AFTER\r")
+
+    e.oop.exec_obj(idx)
+
+    assert e.oop.flag_num("AFTER") == -1
+    assert e.room.objs[idx].offset == -1
+    assert e.room.room_info.bot_msg == "ERR: Bad command NOSUCH"
+
+
+def test_oop_bind_replaces_script_and_runs_bound_program() -> None:
+    e = _engine()
+    src = _add_prog(e, 10, 10, b"@SOURCE\r#SET BOUND_OK\r#END\r")
+    dst = _add_prog(e, 11, 10, b"@DEST\r#BIND SOURCE\r#END\r")
+
+    e.oop.exec_obj(dst)
+
+    assert e.oop.flag_num("BOUND_OK") >= 0
+    assert e.room.objs[dst].inside is e.room.objs[src].inside
+
+
+def test_oop_bind_alias_propagates_zap_mutation_to_all_bound_objects() -> None:
+    e = _engine()
+    src = _add_prog(e, 10, 10, b"@SOURCE\r:PING\r#END\r")
+    dst = _add_prog(e, 11, 10, b"@DEST\r#BIND SOURCE\r#END\r")
+
+    e.oop.exec_obj(dst)
+    e.oop._zap_label(dst, "PING")
+
+    assert b"\r'PING" in e.room.objs[src].inside
