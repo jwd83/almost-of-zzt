@@ -9,6 +9,7 @@ from almost_of_zzt import constants as c
 from almost_of_zzt.engine import GameEngine
 from almost_of_zzt.model import BoardCell, Obj, make_default_room, make_new_world
 from almost_of_zzt.render import Renderer
+from almost_of_zzt.world import load_world
 
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -278,6 +279,69 @@ def test_touch_bound_moves_player_into_adjacent_room_entry() -> None:
     assert dxy == [0, 0]
 
 
+def test_touch_xporter_moves_player_from_adjacent_source_cell() -> None:
+    e = _engine()
+    _set_player(e, 9, 10)
+
+    xport = e.add_obj(10, 10, c.XPORTER, 0x0F, e.info[c.XPORTER].cycle)
+    e.room.objs[xport].xd = 1
+    e.room.objs[xport].yd = 0
+
+    dxy = [1, 0]
+    e.touch_xporter(10, 10, 0, dxy)
+
+    assert (e.player.x, e.player.y) == (11, 10)
+    assert e.room.board[9][10].kind == c.EMPTY
+    assert e.room.board[10][10].kind == c.XPORTER
+    assert e.room.board[11][10].kind == c.PLAYER
+    assert dxy == [0, 0]
+
+
+def test_pusher_pushes_block_through_xporter_and_advances() -> None:
+    e = _engine()
+
+    pusher = e.add_obj(9, 10, c.PUSHER, 0x0F, e.info[c.PUSHER].cycle)
+    e.room.objs[pusher].xd = 1
+    e.room.objs[pusher].yd = 0
+    e.room.board[10][10] = BoardCell(c.BLOCK, 0x0F)
+
+    xport = e.add_obj(11, 10, c.XPORTER, 0x0F, e.info[c.XPORTER].cycle)
+    e.room.objs[xport].xd = 1
+    e.room.objs[xport].yd = 0
+
+    e.upd_pusher(pusher)
+
+    assert e.room.board[10][10].kind == c.PUSHER
+    assert e.room.board[11][10].kind == c.XPORTER
+    assert e.room.board[12][10].kind == c.BLOCK
+    assert e.obj_at(12, 10) == -1
+
+
+def test_conveyor_rotated_pusher_still_pushes_through_xporter() -> None:
+    e = _engine()
+    cx, cy = 20, 10
+
+    conveyor = e.add_obj(cx, cy, c.CONVEYOR_CW, 0x0F, e.info[c.CONVEYOR_CW].cycle)
+    e.room.board[cx + 1][cy] = BoardCell(c.BLOCK, 0x0F)
+
+    xport = e.add_obj(cx, cy + 1, c.XPORTER, 0x0F, e.info[c.XPORTER].cycle)
+    e.room.objs[xport].xd = -1
+    e.room.objs[xport].yd = 0
+
+    pusher = e.add_obj(cx + 2, cy + 1, c.PUSHER, 0x0F, e.info[c.PUSHER].cycle)
+    e.room.objs[pusher].xd = -1
+    e.room.objs[pusher].yd = 0
+
+    e.upd_conveyor_cw(conveyor)
+    assert e.room.board[cx + 1][cy + 1].kind == c.BLOCK
+
+    e.upd_pusher(pusher)
+
+    assert e.room.board[cx - 1][cy + 1].kind == c.BLOCK
+    assert e.room.board[cx][cy + 1].kind == c.XPORTER
+    assert e.room.board[cx + 1][cy + 1].kind == c.PUSHER
+
+
 def test_xporter_dynamic_char_clamps_non_unit_direction_values() -> None:
     e = _engine()
     idx = e.add_obj(20, 10, c.XPORTER, 0x0F, 1)
@@ -361,3 +425,23 @@ def test_tick_game_processes_each_due_tick_step() -> None:
 
     assert read_calls == 5
     assert updates == [0, 0, 0, 0, 0]
+
+
+def test_smoke_original_worlds_tick_without_crash() -> None:
+    for world_name in ("TOUR30.ZZT", "TOWN30.ZZT", "TIMMY30.ZZT", "DEMO30.ZZT"):
+        world = load_world(world_name)
+        e = GameEngine(world)
+
+        if not (0 <= e.world.inv.room <= e.world.num_rooms):
+            e.world.inv.room = 0
+        e.change_room(e.world.inv.room)
+        e._set_play_mode(c.PLAYER)
+        e.play_mode = c.PLAYER
+        e.standby = False
+        e.world.inv.strength = max(1, e.world.inv.strength)
+        e._read_control = lambda: None  # type: ignore[method-assign]
+        e.cycle_last_ms = 0
+        e.counter = 1
+
+        for step in range(64):
+            e._tick_game((step + 1) * e.game_cycle_ms)

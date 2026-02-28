@@ -707,7 +707,9 @@ class GameEngine:
         if (dx, dy) != (port.xd, port.yd):
             return
 
-        new_x, new_y = x, y
+        # Pascal uses the transporter object's coordinates via a `with` block.
+        new_x, new_y = port.x, port.y
+        src_x, src_y = port.x - dx, port.y - dy
         dest_x = -1
         dest_y = -1
         done = False
@@ -716,19 +718,18 @@ class GameEngine:
         while not done:
             new_x += dx
             new_y += dy
-            kind = self.room.board[new_x][new_y].kind
-            if kind == c.BOUND:
+            if self.room.board[new_x][new_y].kind == c.BOUND:
                 done = True
             elif past_x:
                 past_x = False
-                if not self.info[kind].go_thru:
+                if not self.info[self.room.board[new_x][new_y].kind].go_thru:
                     self.push(new_x, new_y, dx, dy)
                 if self.info[self.room.board[new_x][new_y].kind].go_thru:
                     done = True
                     dest_x, dest_y = new_x, new_y
                 else:
                     dest_x = -1
-            if kind == c.XPORTER:
+            if self.room.board[new_x][new_y].kind == c.XPORTER:
                 temp_idx = self.obj_at(new_x, new_y)
                 if temp_idx >= 0:
                     t = self.room.objs[temp_idx]
@@ -736,7 +737,7 @@ class GameEngine:
                         past_x = True
 
         if dest_x != -1:
-            self.move_to(x - dx, y - dy, dest_x, dest_y)
+            self.move_to(src_x, src_y, dest_x, dest_y)
 
     def push(self, x: int, y: int, dx: int, dy: int) -> None:
         kind = self.room.board[x][y].kind
@@ -1204,10 +1205,17 @@ class GameEngine:
                     x1 = x + c.CLOCK_X[(cidx - dirc + 8) % 8]
                     y1 = y + c.CLOCK_Y[(cidx - dirc + 8) % 8]
                     if self.info[cell.kind].cycle > -1:
-                        temp_obj = self.obj_at(x + c.CLOCK_X[cidx], y + c.CLOCK_Y[cidx])
+                        src_x = x + c.CLOCK_X[cidx]
+                        src_y = y + c.CLOCK_Y[cidx]
+                        temp_obj = self.obj_at(src_x, src_y)
                         if temp_obj >= 0:
+                            # Preserve Pascal MoveObj side-effects by restoring the
+                            # source board cell after rotation bookkeeping.
+                            cell_before = copy.deepcopy(self.room.board[src_x][src_y])
+                            self.room.board[src_x][src_y] = copy.deepcopy(temp_cells[cidx])
                             self.room.board[x1][y1].kind = c.EMPTY
                             self.move_obj(temp_obj, x1, y1)
+                            self.room.board[src_x][src_y] = cell_before
                     else:
                         self.room.board[x1][y1] = copy.deepcopy(cell)
 
