@@ -343,7 +343,7 @@ class BoardEditor:
                 if event.type == pygame.KEYDOWN:
                     self._handle_key(event)
             self._draw()
-            pygame.display.flip()
+            self.engine._present()
             self._clock.tick(30)
 
         self.engine.info = init_info_play()
