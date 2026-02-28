@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pygame
 
 from almost_of_zzt import constants as c
 from almost_of_zzt.engine import GameEngine
-from almost_of_zzt.model import BoardCell, Obj, make_new_world
+from almost_of_zzt.model import BoardCell, Obj, make_default_room, make_new_world
 from almost_of_zzt.render import Renderer
 
 
@@ -121,3 +122,91 @@ def test_duper_touches_source_when_player_is_behind() -> None:
 
     assert e.world.inv.ammo == ammo_before + 5
     assert e.room.board[11][10].kind == c.EMPTY
+
+
+def test_monitor_play_switches_to_entry_room() -> None:
+    world = make_new_world()
+    world.game_name = "TEST"
+    world.rooms[0].board[world.rooms[0].objs[0].x][world.rooms[0].objs[0].y] = BoardCell(c.MONITOR, 0x07)
+    world.rooms.append(make_default_room())
+    world.num_rooms = 1
+    world.inv.room = 0
+
+    e = GameEngine(world)
+    e.entry_room = 1
+    e._handle_monitor_key("P")
+
+    assert e.play_mode == c.PLAYER
+    assert e.world.inv.room == 1
+    assert e.standby is True
+    assert e.room.board[e.player.x][e.player.y].kind == c.PLAYER
+
+
+def test_monitor_world_command_loads_and_stays_in_menu() -> None:
+    e = _engine()
+    e._set_play_mode(c.MONITOR)
+    e.standby = False
+
+    picked = Path("WORLD.ZZT")
+    e._select_game_file = lambda ext, title: picked  # type: ignore[method-assign]
+    e._load_world_from_path = lambda path: path == picked  # type: ignore[method-assign]
+
+    e._handle_monitor_key("W")
+
+    assert e.play_mode == c.MONITOR
+    assert e.standby is False
+
+
+def test_monitor_restore_command_starts_play_mode() -> None:
+    e = _engine()
+    e._set_play_mode(c.MONITOR)
+    e.standby = False
+
+    picked = Path("SAVE.SAV")
+    e._select_game_file = lambda ext, title: picked  # type: ignore[method-assign]
+    e._load_world_from_path = lambda path: path == picked  # type: ignore[method-assign]
+
+    e._handle_monitor_key("R")
+
+    assert e.play_mode == c.PLAYER
+    assert e.standby is True
+
+
+def test_standby_moves_off_passage_overlay_cell() -> None:
+    e = _engine()
+    _set_player(e, 10, 10)
+    e.play_mode = c.PLAYER
+    e.standby = True
+    e.room.board[10][10] = BoardCell(c.PASSAGE, 0x0E)
+    e.room.board[11][10] = BoardCell(c.EMPTY, 0)
+    e.control.dx = 1
+    e.control.dy = 0
+    e.control.key = "\x00"
+    e._read_control = lambda: None  # type: ignore[method-assign]
+
+    e._tick_game(100)
+
+    assert (e.player.x, e.player.y) == (11, 10)
+    assert e.room.board[10][10].kind == c.PASSAGE
+    assert e.room.board[11][10].kind == c.PLAYER
+    assert e.standby is False
+
+
+def test_touch_bound_moves_player_into_adjacent_room_entry() -> None:
+    world = make_new_world()
+    world.game_name = "TEST"
+    world.rooms.append(make_default_room())
+    world.num_rooms = 1
+    world.inv.room = 0
+    world.rooms[0].room_info.room_udlr[3] = 1
+    world.rooms[1].board[1][10] = BoardCell(c.EMPTY, 0)
+
+    e = GameEngine(world)
+    _set_player(e, c.XS, 10)
+    dxy = [1, 0]
+
+    e.touch_bound(c.XS + 1, 10, 0, dxy)
+
+    assert e.world.inv.room == 1
+    assert (e.player.x, e.player.y) == (1, 10)
+    assert dxy == [0, 0]

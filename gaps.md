@@ -5,7 +5,7 @@ This file tracks behavior where the Python port currently differs from, or infer
 ## Implemented with inference
 
 - Audio (`SoundAdd`, `SoundStop`, `Music`) is not implemented; runtime is silent.
-- Menu/monitor/editor flows from Pascal are reduced to direct gameplay entry.
+- Monitor/menu command flow is now implemented for `Play` / `Restore` / `World` with scroll-based file pickers, but uses simplified prompts and no DOS-era metadata descriptions.
 - Intro/help/document rendering is reduced to in-game status messages.
 - Keyboard buffering and timing are approximated with Pygame key state/events.
 - Monochrome/video mode and joystick/mouse control paths are not implemented.
@@ -17,7 +17,8 @@ This file tracks behavior where the Python port currently differs from, or infer
 - Dark-room redraw behavior is approximated by full-frame redraw, not Pascal incremental redraw.
 - Bottom message lifecycle uses a simplified timer, not special object slot semantics.
 - Save/load uses Pascal field layout and room compression but does not preserve raw pointer bytes meaningfully.
-- High score handling (`LoadHi`, `ViewHi`, `NoteScore`) is not implemented.
+- High score handling (`LoadHi`, `ViewHi`, `NoteScore`) remains unimplemented; monitor `H` currently reports this as a stub.
+- `About`, board editor (`E`), and secret monitor command (`|`) are currently status-message stubs.
 - Registered-copy and configuration file (`ZZT.CFG`) behavior is not implemented.
 - Several editor-only and secret/debug command branches are omitted.
 

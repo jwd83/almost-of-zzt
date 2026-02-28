@@ -4,6 +4,7 @@ import copy
 import random
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 
 import pygame
 
@@ -12,7 +13,7 @@ from .info import InfoDef, init_info_play
 from .model import BoardCell, Obj, Room, RoomInfo, make_default_room
 from .oop import OOPRunner
 from .render import Renderer
-from .world import save_world
+from .world import load_world, save_world
 
 
 @dataclass(slots=True)
@@ -58,6 +59,10 @@ class GameEngine:
 
         self.sound_enabled = True
         self.first_thru = True
+        self.play_mode = c.PLAYER
+        self.entry_room = 0
+        self._world_file: Path | None = None
+        self._world_origin_file: Path | None = None
 
         self.oop = OOPRunner(self)
 
@@ -70,6 +75,7 @@ class GameEngine:
             self._build_demo_world()
 
         self._ensure_player_board()
+        self._init_menu_state()
 
     @property
     def room(self) -> Room:
@@ -94,7 +100,7 @@ class GameEngine:
 
         self.world.rooms = [title, demo]
         self.world.num_rooms = 1
-        self.world.inv.room = 1
+        self.world.inv.room = 0
         self.world.inv.orig_name = "DEMO"
 
         self._add_obj_to_room(demo, 10, 10, c.AMMO, 0x03, self.info[c.AMMO].cycle)
@@ -108,7 +114,169 @@ class GameEngine:
 
     def _ensure_player_board(self) -> None:
         p = self.player
-        self.room.board[p.x][p.y] = BoardCell(c.PLAYER, self.info[c.PLAYER].col)
+        if self.room.board[p.x][p.y].kind != c.MONITOR:
+            self.room.board[p.x][p.y] = BoardCell(c.PLAYER, self.info[c.PLAYER].col)
+
+    def _init_menu_state(self) -> None:
+        self.entry_room = self.world.inv.room
+        if (
+            self.world.inv.orig_name == "DEMO"
+            and self.world.game_name == ""
+            and self.world.num_rooms >= 1
+            and self.world.inv.room == 0
+        ):
+            self.entry_room = 1
+
+        if self.world.game_name:
+            path = Path(self.world.game_name)
+            if path.exists():
+                self._world_file = path
+                if path.suffix.upper() == c.WORLD_EXT:
+                    self._world_origin_file = path
+        if self._world_origin_file is None and self.world.inv.orig_name:
+            world_path = Path(f"{self.world.inv.orig_name}{c.WORLD_EXT}")
+            if world_path.exists():
+                self._world_origin_file = world_path
+
+        if self.room.board[self.player.x][self.player.y].kind == c.MONITOR:
+            self.play_mode = c.MONITOR
+            self.standby = False
+        else:
+            self.play_mode = c.PLAYER
+            self.standby = True
+        self._set_play_mode(self.play_mode)
+
+    def _set_play_mode(self, mode: int) -> None:
+        self.play_mode = mode
+        p = self.player
+        self.room.board[p.x][p.y] = BoardCell(mode, self.info[mode].col)
+
+    def _select_game_file(self, ext: str, title: str) -> Path | None:
+        files = sorted(Path.cwd().glob(f"*{ext}"), key=lambda p: p.name.lower())
+        if not files:
+            self.put_bot_msg(120, f"No {ext} files found.")
+            return None
+
+        lines: list[str] = []
+        cmd_map: dict[str, Path] = {}
+        for idx, path in enumerate(files):
+            cmd = f"F{idx}"
+            cmd_map[cmd] = path
+            lines.append(f"!{cmd};{path.name}")
+        lines.append("Exit")
+
+        selection = self.show_scroll(lines, title, obj_flag=True)
+        if not selection:
+            return None
+        return cmd_map.get(selection)
+
+    def _load_world_from_path(self, path: Path) -> bool:
+        try:
+            loaded = load_world(str(path))
+        except Exception:
+            self.put_bot_msg(200, f"Could not load {path.name}")
+            return False
+
+        self.world = loaded
+        self._world_file = path
+        if path.suffix.upper() == c.WORLD_EXT:
+            self._world_origin_file = path
+            if not self.world.inv.orig_name:
+                self.world.inv.orig_name = path.stem.upper()
+        elif self.world.inv.orig_name:
+            origin = Path(f"{self.world.inv.orig_name}{c.WORLD_EXT}")
+            if origin.exists():
+                self._world_origin_file = origin
+
+        if self.world.num_rooms < 0:
+            self.world.num_rooms = 0
+        if not (0 <= self.world.inv.room <= self.world.num_rooms):
+            self.world.inv.room = 0
+        self.entry_room = self.world.inv.room
+        self.key_buffer.clear()
+        self.move_queue.clear()
+        self.bot_msg_ticks = 0
+        return True
+
+    def _start_play(self, reload_original: bool) -> None:
+        if reload_original and self._world_origin_file and self._world_origin_file.exists():
+            if not self._load_world_from_path(self._world_origin_file):
+                return
+
+        if not (0 <= self.entry_room <= self.world.num_rooms):
+            self.entry_room = self.world.inv.room
+        self.change_room(self.entry_room)
+        self._set_play_mode(c.PLAYER)
+        self.note_enter_new_room()
+        self.standby = True
+        self.counter = self.random.randrange(100)
+        self.obj_num = self.room.num_objs + 1
+
+    def _handle_monitor_key(self, key: str) -> None:
+        key_u = key.upper()
+        if not key_u or key_u == "\x00":
+            return
+
+        if key_u == "W":
+            picked = self._select_game_file(c.WORLD_EXT, "ZZT Worlds")
+            if picked and self._load_world_from_path(picked):
+                self.entry_room = self.world.inv.room
+                self._set_play_mode(c.MONITOR)
+                self.standby = False
+                self.put_bot_msg(120, f"Loaded {picked.name}")
+            return
+
+        if key_u == "R":
+            picked = self._select_game_file(c.SAVE_EXT, "Saved Games")
+            if picked and self._load_world_from_path(picked):
+                self.entry_room = self.world.inv.room
+                self._start_play(reload_original=False)
+            return
+
+        if key_u == "P":
+            self._start_play(reload_original=self.world.inv.play_flag)
+            return
+
+        if key_u == "H":
+            self.put_bot_msg(180, "High scores are not implemented yet.")
+            return
+
+        if key_u == "A":
+            self.put_bot_msg(180, "About/help docs: ref/HELP/ABOUT.HLP")
+            return
+
+        if key_u == "S":
+            self.speed = 1 if self.speed >= 9 else self.speed + 1
+            self.game_cycle_ms = self.speed * 20
+            self.put_bot_msg(120, f"Game speed: {self.speed}")
+            return
+
+        if key_u == "E":
+            self.put_bot_msg(120, "Board editor is not implemented.")
+            return
+
+        if key_u == "|":
+            self.put_bot_msg(120, "Secret command input is not implemented.")
+            return
+
+        if key_u in {"N"}:
+            self.put_bot_msg(80, "No command bound.")
+            return
+
+        if key_u in {"\x1B", "Q"}:
+            self.exit_program = True
+
+    def _standby_step_player(self, dx: int, dy: int) -> None:
+        src_x, src_y = self.player.x, self.player.y
+        dst_x = src_x + dx
+        dst_y = src_y + dy
+        self.player.x = dst_x
+        self.player.y = dst_y
+        self.player.under = copy.deepcopy(self.room.board[dst_x][dst_y])
+        self.room.board[dst_x][dst_y] = BoardCell(c.PLAYER, self.info[c.PLAYER].col)
+        if self.world.inv.torch_time > 0:
+            self.do_area(dst_x, dst_y, 0)
+            self.do_area(src_x, src_y, 0)
 
     def _add_obj_to_room(self, room: Room, x: int, y: int, kind: int, color: int, cycle: int) -> int:
         if len(room.objs) - 1 >= c.MAX_OBJS:
@@ -337,8 +505,8 @@ class GameEngine:
 
         self.standby = True
         self.note_enter_new_room()
-        if self.world.inv.room == old_room:
-            return
+        if self.world.inv.room != old_room:
+            self.counter = self.random.randrange(100)
 
     def note_enter_new_room(self) -> None:
         self.room.room_info.start_x = self.player.x
@@ -1143,8 +1311,7 @@ class GameEngine:
                 self.zap_obj(0)
 
     def upd_monitor(self, n: int) -> None:
-        if self.control.key.upper() in {"W", "P", "A", "E", "S", "R", "H", "N", "\x1B", "Q", "|"}:
-            self.done = True
+        self._handle_monitor_key(self.control.key)
 
     def upd_scroll(self, n: int) -> None:
         if n >= len(self.room.objs):
@@ -1330,6 +1497,32 @@ class GameEngine:
         renderer.draw_text(panel_x, 2, "- - - - -", 0x1F)
 
         inv = self.world.inv
+        if self.play_mode == c.MONITOR:
+            world_name = inv.orig_name if inv.orig_name else "Untitled"
+            renderer.draw_text(61, 5, "Pick a command:", 0x1B)
+            renderer.draw_text(61, 7, " W ", 0x30)
+            renderer.draw_text(64, 7, "World:", 0x1E)
+            renderer.draw_text(68, 8, world_name[:11], 0x1F)
+            renderer.draw_text(61, 11, " P ", 0x70)
+            renderer.draw_text(64, 11, "Play", 0x1F)
+            renderer.draw_text(61, 12, " R ", 0x30)
+            renderer.draw_text(64, 12, "Restore game", 0x1E)
+            renderer.draw_text(61, 13, " Q ", 0x70)
+            renderer.draw_text(64, 13, "Quit", 0x1E)
+            renderer.draw_text(61, 16, " A ", 0x30)
+            renderer.draw_text(64, 16, "About ZZT!", 0x1F)
+            renderer.draw_text(61, 17, " H ", 0x70)
+            renderer.draw_text(64, 17, "High Scores", 0x1E)
+            renderer.draw_text(61, 21, " S ", 0x70)
+            renderer.draw_text(64, 21, f"Game speed: {self.speed}", 0x1F)
+
+            msg = self.room.room_info.bot_msg
+            if msg:
+                text = f" {msg[:58]} "
+                start = max(0, (c.XS - len(text)) // 2)
+                renderer.draw_text(start, c.YS - 2, text, 0x1F)
+            return
+
         renderer.draw_text(panel_x + 1, 7, "Health:", 0x1E)
         renderer.draw_text(panel_x + 1, 8, "Ammo:", 0x1E)
         renderer.draw_text(panel_x + 1, 9, "Torches:", 0x1E)
@@ -1565,6 +1758,15 @@ class GameEngine:
         self.control.key = key
 
     def _tick_game(self, now_ms: int) -> None:
+        if self.play_mode == c.MONITOR:
+            self._read_control()
+            self._handle_monitor_key(self.control.key)
+            if self.bot_msg_ticks > 0:
+                self.bot_msg_ticks -= 1
+                if self.bot_msg_ticks <= 0:
+                    self.room.room_info.bot_msg = ""
+            return
+
         if self.standby:
             self._read_control()
             if self.control.key in {"\x1b", "q", "Q"}:
@@ -1576,6 +1778,8 @@ class GameEngine:
                 if (dxy[0] or dxy[1]) and self.info[self.room.board[self.player.x + dxy[0]][self.player.y + dxy[1]].kind].go_thru:
                     if self.room.board[self.player.x][self.player.y].kind == c.PLAYER:
                         self.move_obj(0, self.player.x + dxy[0], self.player.y + dxy[1])
+                    else:
+                        self._standby_step_player(dxy[0], dxy[1])
                     self.standby = False
                     self.counter = self.random.randrange(100)
                     self.obj_num = self.room.num_objs + 1
@@ -1612,7 +1816,8 @@ class GameEngine:
         self._renderer = Renderer(self._screen)
         self._clock = pygame.time.Clock()
 
-        self.note_enter_new_room()
+        if self.play_mode == c.PLAYER:
+            self.note_enter_new_room()
 
         self.cycle_last_ms = pygame.time.get_ticks()
 
