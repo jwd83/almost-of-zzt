@@ -10,7 +10,7 @@ import pygame
 
 from . import constants as c
 from .info import InfoDef, init_info_play
-from .model import BoardCell, Obj, Room, RoomInfo, make_default_room
+from .model import BoardCell, Obj, Room, RoomInfo, make_default_room, make_new_world
 from .oop import OOPRunner
 from .render import Renderer
 from .world import load_world, save_world
@@ -30,6 +30,16 @@ class ScrollEntry:
     text: str
     kind: str
     command: str | None = None
+
+
+@dataclass(slots=True)
+class EditScrollState:
+    lines: list[str]
+    cur_x: int = 0
+    cur_y: int = 0
+    insert_mode: bool = True
+    done: bool = False
+    cancelled: bool = False
 
 
 class GameEngine:
@@ -64,6 +74,8 @@ class GameEngine:
         self.sound_enabled = True
         self.first_thru = True
         self.play_mode = c.PLAYER
+        self._standby_blink_visible = True
+        self._standby_blink_last_ms = 0
         self.entry_room = 0
         self._world_file: Path | None = None
         self._world_origin_file: Path | None = None
@@ -218,6 +230,8 @@ class GameEngine:
         self._set_play_mode(c.PLAYER)
         self.note_enter_new_room()
         self.standby = True
+        self._standby_blink_visible = True
+        self._standby_blink_last_ms = 0
         self.counter = self.random.randrange(100)
         self.obj_num = self.room.num_objs + 1
         self._death_score_noted = False
@@ -330,6 +344,175 @@ class GameEngine:
 
         return ""
 
+    def _input_line(self, prompt: str, initial: str = "", max_len: int = 50) -> str | None:
+        if self._renderer is None or self._screen is None:
+            return initial
+
+        clock = self._clock or pygame.time.Clock()
+        value = initial[:max_len]
+        while not self.exit_program:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.exit_program = True
+                    return None
+                if event.type != pygame.KEYDOWN:
+                    continue
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.key_buffer.clear()
+                    self.move_queue.clear()
+                    return value
+                if event.key == pygame.K_ESCAPE:
+                    self.key_buffer.clear()
+                    self.move_queue.clear()
+                    return None
+                if event.key == pygame.K_BACKSPACE:
+                    value = value[:-1]
+                elif event.unicode and event.unicode.isprintable() and event.unicode not in "\r\n\t":
+                    if len(value) < max_len:
+                        value += event.unicode
+
+            self._renderer.clear()
+            self._draw_board(self._renderer)
+            self._draw_panel(self._renderer)
+            self._renderer.draw_text(1, c.YS - 2, (" " + prompt)[: c.XS], 0x1F)
+            shown = value if len(value) <= c.XS - 3 else value[-(c.XS - 3) :]
+            self._renderer.draw_text(1, c.YS - 1, ("> " + shown + "_")[: c.XS], 0x1E)
+            pygame.display.flip()
+            clock.tick(30)
+        return None
+
+    def in_yn(self, prompt: str, default: bool = False) -> bool:
+        if self._renderer is None or self._screen is None:
+            return default
+
+        clock = self._clock or pygame.time.Clock()
+        cur = 0 if default else 1
+        options = ("Yes", "No")
+        while not self.exit_program:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.exit_program = True
+                    return default
+                if event.type != pygame.KEYDOWN:
+                    continue
+                if event.key in (pygame.K_LEFT, pygame.K_UP):
+                    cur = max(0, cur - 1)
+                elif event.key in (pygame.K_RIGHT, pygame.K_DOWN):
+                    cur = min(1, cur + 1)
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.key_buffer.clear()
+                    self.move_queue.clear()
+                    return cur == 0
+                elif event.key == pygame.K_ESCAPE:
+                    self.key_buffer.clear()
+                    self.move_queue.clear()
+                    return default
+
+            self._renderer.clear()
+            self._draw_board(self._renderer)
+            self._draw_panel(self._renderer)
+            self._renderer.draw_text(2, c.YS - 2, prompt[: c.XS - 2], 0x1F)
+            yes_attr = 0x1C if cur == 0 else 0x1E
+            no_attr = 0x1C if cur == 1 else 0x1E
+            self._renderer.draw_text(2, c.YS - 1, " Yes ", yes_attr)
+            self._renderer.draw_text(8, c.YS - 1, " No ", no_attr)
+            pygame.display.flip()
+            clock.tick(30)
+        return default
+
+    def in_string(self, x: int, y: int, max_len: int, prompt: str = "Input:", initial: str = "") -> str | None:
+        del x, y
+        return self._input_line(prompt, initial=initial, max_len=max_len)
+
+    def in_num(self, x: int, y: int, prompt: str, val: int) -> int:
+        text = self.in_string(x, y, 10, prompt, str(val))
+        if text is None:
+            return val
+        try:
+            return int(text.strip())
+        except ValueError:
+            return val
+
+    def in_char(self, x: int, y: int, prompt: str, val: int) -> int:
+        parsed = self.in_num(x, y, prompt, val)
+        return max(1, min(255, parsed))
+
+    def in_choice(self, y: int, prompt: str, choices: list[str], val: int = 0) -> int:
+        del y
+        if not choices:
+            return 0
+        if self._renderer is None or self._screen is None:
+            return max(0, min(len(choices) - 1, val))
+
+        clock = self._clock or pygame.time.Clock()
+        cur = max(0, min(len(choices) - 1, val))
+        while not self.exit_program:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.exit_program = True
+                    return cur
+                if event.type != pygame.KEYDOWN:
+                    continue
+                if event.key in (pygame.K_UP, pygame.K_LEFT):
+                    cur = (cur - 1) % len(choices)
+                elif event.key in (pygame.K_DOWN, pygame.K_RIGHT):
+                    cur = (cur + 1) % len(choices)
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.key_buffer.clear()
+                    self.move_queue.clear()
+                    return cur
+                elif event.key == pygame.K_ESCAPE:
+                    self.key_buffer.clear()
+                    self.move_queue.clear()
+                    return val
+
+            self._renderer.clear()
+            self._draw_board(self._renderer)
+            self._draw_panel(self._renderer)
+            self._renderer.draw_text(2, c.YS - 2, prompt[: c.XS - 2], 0x1F)
+            rendered = "  ".join(f"[{cname}]" if i == cur else cname for i, cname in enumerate(choices))
+            self._renderer.draw_text(2, c.YS - 1, rendered[: c.XS - 2], 0x1E)
+            pygame.display.flip()
+            clock.tick(30)
+        return cur
+
+    def in_dir(self, y: int, prompt: str) -> tuple[int, int]:
+        del y
+        if self._renderer is None or self._screen is None:
+            return (0, -1)
+
+        clock = self._clock or pygame.time.Clock()
+        while not self.exit_program:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.exit_program = True
+                    return (0, -1)
+                if event.type != pygame.KEYDOWN:
+                    continue
+                if event.key in (pygame.K_UP, pygame.K_KP8):
+                    return (0, -1)
+                if event.key in (pygame.K_DOWN, pygame.K_KP2):
+                    return (0, 1)
+                if event.key in (pygame.K_LEFT, pygame.K_KP4):
+                    return (-1, 0)
+                if event.key in (pygame.K_RIGHT, pygame.K_KP6):
+                    return (1, 0)
+                if event.key == pygame.K_ESCAPE:
+                    return (0, -1)
+
+            self._renderer.clear()
+            self._draw_board(self._renderer)
+            self._draw_panel(self._renderer)
+            self._renderer.draw_text(2, c.YS - 2, prompt[: c.XS - 2], 0x1F)
+            self._renderer.draw_text(2, c.YS - 1, "Use an arrow key", 0x1E)
+            pygame.display.flip()
+            clock.tick(30)
+        return (0, -1)
+
+    def in_fancy(self, prompt: str) -> str:
+        text = self.in_string(1, c.YS - 1, 50, prompt, "")
+        return text if text is not None else ""
+
     def _note_score(self, score: int) -> None:
         rank = 1
         while rank <= c.NUM_HI and score < self._hi_scores[rank - 1][1]:
@@ -370,6 +553,104 @@ class GameEngine:
         self.move_queue.clear()
         self.control = ControlState()
         self.obj_num = self.room.num_objs + 1
+
+    def ask_quit_game(self) -> bool:
+        if self.world.inv.strength <= 0:
+            self._handle_player_death()
+            return True
+        if not self.in_yn("Quit current game?", default=False):
+            return False
+        self.entry_room = self.world.inv.room
+        if 0 <= 0 <= self.world.num_rooms:
+            self.change_room(0)
+        self._set_play_mode(c.MONITOR)
+        self.standby = False
+        self.key_buffer.clear()
+        self.move_queue.clear()
+        self.control = ControlState()
+        return True
+
+    def secret_cmd(self) -> None:
+        text = self.in_string(1, c.YS - 1, 60, "Secret command:", "")
+        if not text:
+            return
+
+        cmd = text.strip()
+        if not cmd:
+            return
+
+        ucmd = cmd.upper()
+        if ucmd.startswith("+") and len(ucmd) > 1:
+            self.oop.set_flag(ucmd[1:])
+            self.put_bot_msg(120, f"Flag set: {ucmd[1:]}")
+            return
+        if ucmd.startswith("-") and len(ucmd) > 1:
+            self.oop.clear_flag(ucmd[1:])
+            self.put_bot_msg(120, f"Flag cleared: {ucmd[1:]}")
+            return
+
+        if self.oop.flag_num("DEBUG") < 0:
+            self.put_bot_msg(120, "Set DEBUG flag first.")
+            return
+
+        parts = ucmd.split()
+        head = parts[0]
+        arg = parts[1] if len(parts) > 1 else ""
+        if head == "HEALTH":
+            self.world.inv.strength = int(arg) if arg.lstrip("-").isdigit() else 100
+        elif head == "AMMO":
+            self.world.inv.ammo = int(arg) if arg.lstrip("-").isdigit() else 100
+        elif head == "GEMS":
+            self.world.inv.gems = int(arg) if arg.lstrip("-").isdigit() else 100
+        elif head == "TORCHES":
+            self.world.inv.torches = int(arg) if arg.lstrip("-").isdigit() else 20
+        elif head == "TIME":
+            self.world.inv.room_time = int(arg) if arg.lstrip("-").isdigit() else 0
+        elif head == "DARK":
+            self.room.room_info.is_dark = not self.room.room_info.is_dark
+        elif head == "ZAP":
+            for idx in range(self.room.num_objs, 0, -1):
+                if idx < len(self.room.objs) and self.info[self.room.board[self.room.objs[idx].x][self.room.objs[idx].y].kind].killable:
+                    self.kill_obj(idx)
+        elif head == "KEY":
+            if arg.isdigit():
+                key_idx = int(arg) - 1
+                if 0 <= key_idx < 7:
+                    self.world.inv.keys[key_idx] = True
+        elif head == "NOKEY":
+            if arg.isdigit():
+                key_idx = int(arg) - 1
+                if 0 <= key_idx < 7:
+                    self.world.inv.keys[key_idx] = False
+        else:
+            self.put_bot_msg(120, "Unknown secret command.")
+            return
+        self.put_bot_msg(120, "Secret command applied.")
+
+    def new_game(self) -> None:
+        self.world = make_new_world()
+        self.info = init_info_play()
+        self.entry_room = 0
+        self.counter = self.random.randrange(1, 100)
+        self.obj_num = 0
+        self.standby = False
+        self._death_score_noted = False
+        self._set_play_mode(c.MONITOR)
+        self.room.board[self.player.x][self.player.y] = BoardCell(c.MONITOR, self.info[c.MONITOR].col)
+
+    def pdraw_board(self) -> None:
+        if self._renderer is None or self._screen is None:
+            return
+        cells = [(x, y) for y in range(1, c.YS + 1) for x in range(1, c.XS + 1)]
+        self.random.shuffle(cells)
+        for idx, (x, y) in enumerate(cells):
+            self._renderer.draw_glyph(x - 1, y - 1, 0xB1, 0x08 + (idx % 7))
+            if (idx % 120) == 0:
+                pygame.display.flip()
+        self._renderer.clear()
+        self._draw_board(self._renderer)
+        self._draw_panel(self._renderer)
+        pygame.display.flip()
 
     def _handle_monitor_key(self, key: str) -> None:
         key_u = key.upper()
@@ -412,15 +693,18 @@ class GameEngine:
             return
 
         if key_u == "E":
-            self.put_bot_msg(120, "Board editor is not implemented.")
+            from .editor import BoardEditor
+
+            editor = BoardEditor(self)
+            editor.design_board()
             return
 
         if key_u == "|":
-            self.put_bot_msg(120, "Secret command input is not implemented.")
+            self.secret_cmd()
             return
 
         if key_u in {"N"}:
-            self.put_bot_msg(80, "No command bound.")
+            self.new_game()
             return
 
         if key_u in {"\x1B", "Q"}:
@@ -641,7 +925,10 @@ class GameEngine:
     def change_room(self, n: int) -> None:
         if not (0 <= n <= self.world.num_rooms):
             return
+        if n == self.world.inv.room:
+            return
         self.world.inv.room = n
+        self.pdraw_board()
 
     def enter_passage(self, x: int, y: int) -> None:
         idx = self.obj_at(x, y)
@@ -690,6 +977,9 @@ class GameEngine:
                 if code > 0 and dist_ok:
                     kind = self.room.board[tx][ty].kind
                     if code == 1:
+                        obj_idx = self.obj_at(tx, ty)
+                        if obj_idx > 0 and kind == c.PROG:
+                            self.oop.lsend_msg(-obj_idx, "BOMBED", False)
                         if self.info[kind].killable or kind == c.SBOMB:
                             self.zap(tx, ty)
                         if kind in (c.EMPTY, c.BREAK_WALL):
@@ -1471,7 +1761,7 @@ class GameEngine:
                 self.put_bot_msg(200, "You don't have any torches!")
                 self.world.first.no_torch = False
         elif key in {"\x1B", "Q"}:
-            self.exit_program = True
+            self.ask_quit_game()
         elif key == "S":
             save_world(self.world, "SAVED.SAV")
             self.put_bot_msg(100, "Saved to SAVED.SAV")
@@ -1671,6 +1961,15 @@ class GameEngine:
                     renderer.draw_glyph(x - 1, y - 1, 0xB0, 0x07)
                     continue
 
+                if (
+                    kind == c.PLAYER
+                    and self.play_mode == c.PLAYER
+                    and self.standby
+                    and not self._standby_blink_visible
+                ):
+                    renderer.draw_glyph(x - 1, y - 1, ord(" "), 0x0F)
+                    continue
+
                 if kind == c.EMPTY:
                     renderer.draw_glyph(x - 1, y - 1, ord(" "), 0x0F)
                 elif kind < c.TEXT_COL:
@@ -1742,7 +2041,7 @@ class GameEngine:
         renderer.draw_text(61, 21, " S ", 0x70)
         renderer.draw_text(64, 21, "Save game", 0x1F)
         renderer.draw_text(61, 22, " P ", 0x30)
-        renderer.draw_text(64, 22, "Pause", 0x1F)
+        renderer.draw_text(64, 22, "Pausing..." if self.standby else "Pause", 0x1F)
         renderer.draw_text(61, 23, " Q ", 0x70)
         renderer.draw_text(64, 23, "Quit", 0x1F)
 
@@ -1899,6 +2198,181 @@ class GameEngine:
         self.move_queue.clear()
         return result
 
+    def _decode_scroll_lines(self, initial: bytes | str) -> list[str]:
+        if isinstance(initial, bytes):
+            text = initial.decode("cp437", errors="replace")
+        else:
+            text = initial
+        lines = text.replace("\n", "\r").split("\r")
+        if lines and lines[-1] == "":
+            lines = lines[:-1]
+        return lines if lines else [""]
+
+    def _encode_scroll_lines(self, lines: list[str]) -> bytes:
+        safe = [line[:250] for line in lines]
+        return ("\r".join(safe) + "\r").encode("cp437", errors="replace")
+
+    def _edit_scroll_apply_key(self, state: EditScrollState, key: int, unicode: str = "", mod: int = 0) -> None:
+        if not state.lines:
+            state.lines = [""]
+        max_lines = 255
+        max_len = 250
+
+        if key == pygame.K_ESCAPE:
+            state.cancelled = True
+            state.done = True
+            return
+        if key in (pygame.K_F2,) or (key == pygame.K_s and (mod & pygame.KMOD_CTRL)):
+            state.done = True
+            return
+        if key == pygame.K_INSERT:
+            state.insert_mode = not state.insert_mode
+            return
+
+        line = state.lines[state.cur_y]
+        if key == pygame.K_UP:
+            state.cur_y = max(0, state.cur_y - 1)
+            state.cur_x = min(state.cur_x, len(state.lines[state.cur_y]))
+            return
+        if key == pygame.K_DOWN:
+            state.cur_y = min(len(state.lines) - 1, state.cur_y + 1)
+            state.cur_x = min(state.cur_x, len(state.lines[state.cur_y]))
+            return
+        if key == pygame.K_LEFT:
+            if state.cur_x > 0:
+                state.cur_x -= 1
+            elif state.cur_y > 0:
+                state.cur_y -= 1
+                state.cur_x = len(state.lines[state.cur_y])
+            return
+        if key == pygame.K_RIGHT:
+            if state.cur_x < len(line):
+                state.cur_x += 1
+            elif state.cur_y < len(state.lines) - 1:
+                state.cur_y += 1
+                state.cur_x = 0
+            return
+        if key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            left = line[: state.cur_x]
+            right = line[state.cur_x :]
+            state.lines[state.cur_y] = left
+            if len(state.lines) < max_lines:
+                state.lines.insert(state.cur_y + 1, right)
+                state.cur_y += 1
+                state.cur_x = 0
+            return
+        if key == pygame.K_BACKSPACE:
+            if state.cur_x > 0:
+                state.lines[state.cur_y] = line[: state.cur_x - 1] + line[state.cur_x :]
+                state.cur_x -= 1
+            elif state.cur_y > 0:
+                prev = state.lines[state.cur_y - 1]
+                state.cur_x = len(prev)
+                state.lines[state.cur_y - 1] = (prev + line)[:max_len]
+                del state.lines[state.cur_y]
+                state.cur_y -= 1
+            return
+        if key == pygame.K_DELETE:
+            if state.cur_x < len(line):
+                state.lines[state.cur_y] = line[: state.cur_x] + line[state.cur_x + 1 :]
+            elif state.cur_y < len(state.lines) - 1:
+                state.lines[state.cur_y] = (line + state.lines[state.cur_y + 1])[:max_len]
+                del state.lines[state.cur_y + 1]
+            return
+        if key == pygame.K_y and (mod & pygame.KMOD_CTRL):
+            if len(state.lines) > 1:
+                del state.lines[state.cur_y]
+                state.cur_y = min(state.cur_y, len(state.lines) - 1)
+            else:
+                state.lines[0] = ""
+                state.cur_y = 0
+            state.cur_x = min(state.cur_x, len(state.lines[state.cur_y]))
+            return
+
+        if unicode and unicode.isprintable() and unicode not in "\r\n\t":
+            if len(line) >= max_len and state.insert_mode:
+                return
+            if state.insert_mode:
+                line = line[: state.cur_x] + unicode + line[state.cur_x :]
+            else:
+                if state.cur_x < len(line):
+                    line = line[: state.cur_x] + unicode + line[state.cur_x + 1 :]
+                else:
+                    line = line + unicode
+            state.lines[state.cur_y] = line[:max_len]
+            state.cur_x = min(max_len, state.cur_x + 1)
+
+    def _draw_edit_scroll_overlay(self, renderer: Renderer, title: str, state: EditScrollState) -> None:
+        x0, y0 = 4, 2
+        w, h = 54, 20
+        body_w = w - 4
+        visible = h - 5
+        top = max(0, min(state.cur_y - visible // 2, max(0, len(state.lines) - visible)))
+
+        for y in range(y0, y0 + h):
+            for x in range(x0, x0 + w):
+                renderer.draw_glyph(x, y, ord(" "), 0x1E)
+        for x in range(x0 + 1, x0 + w - 1):
+            renderer.draw_glyph(x, y0, 0xCD, 0x0F)
+            renderer.draw_glyph(x, y0 + h - 1, 0xCD, 0x0F)
+        for y in range(y0 + 1, y0 + h - 1):
+            renderer.draw_glyph(x0, y, 0xBA, 0x0F)
+            renderer.draw_glyph(x0 + w - 1, y, 0xBA, 0x0F)
+        renderer.draw_glyph(x0, y0, 0xC9, 0x0F)
+        renderer.draw_glyph(x0 + w - 1, y0, 0xBB, 0x0F)
+        renderer.draw_glyph(x0, y0 + h - 1, 0xC8, 0x0F)
+        renderer.draw_glyph(x0 + w - 1, y0 + h - 1, 0xBC, 0x0F)
+
+        renderer.draw_text(x0 + 2, y0 + 1, title[: body_w], 0x1F)
+        mode = "INS" if state.insert_mode else "OVR"
+        renderer.draw_text(x0 + w - 8, y0 + 1, mode, 0x1A)
+
+        for row in range(visible):
+            idx = top + row
+            if idx >= len(state.lines):
+                break
+            attr = 0x1C if idx == state.cur_y else 0x1E
+            text = state.lines[idx][:body_w]
+            renderer.draw_text(x0 + 2, y0 + 2 + row, text.ljust(body_w), attr)
+
+        cy = y0 + 2 + (state.cur_y - top)
+        cx = x0 + 2 + min(state.cur_x, body_w - 1)
+        if y0 + 2 <= cy < y0 + h - 2:
+            cursor_ch = ord(state.lines[state.cur_y][state.cur_x]) if state.cur_x < len(state.lines[state.cur_y]) else ord("_")
+            renderer.draw_glyph(cx, cy, cursor_ch, 0x70)
+
+        help_text = "F2/Ctrl+S save  Esc cancel  Ctrl+Y del line"
+        renderer.draw_text(x0 + 2, y0 + h - 2, help_text[:body_w], 0x1A)
+
+    def edit_scroll(self, initial: bytes | str, title: str = "Edit text") -> bytes | None:
+        state = EditScrollState(lines=self._decode_scroll_lines(initial))
+        if self._renderer is None or self._screen is None:
+            return self._encode_scroll_lines(state.lines)
+
+        clock = self._clock or pygame.time.Clock()
+        while not self.exit_program and not state.done:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.exit_program = True
+                    state.cancelled = True
+                    state.done = True
+                    break
+                if event.type == pygame.KEYDOWN:
+                    self._edit_scroll_apply_key(state, event.key, event.unicode, event.mod)
+
+            self._renderer.clear()
+            self._draw_board(self._renderer)
+            self._draw_panel(self._renderer)
+            self._draw_edit_scroll_overlay(self._renderer, title, state)
+            pygame.display.flip()
+            clock.tick(30)
+
+        self.key_buffer.clear()
+        self.move_queue.clear()
+        if state.cancelled:
+            return None
+        return self._encode_scroll_lines(state.lines)
+
     def _pump_events(self) -> None:
         key_to_dir: dict[int, tuple[int, int]] = {
             pygame.K_UP: (0, -1),
@@ -1980,9 +2454,12 @@ class GameEngine:
             return
 
         if self.standby:
+            if now_ms - self._standby_blink_last_ms >= 250:
+                self._standby_blink_last_ms = now_ms
+                self._standby_blink_visible = not self._standby_blink_visible
             self._read_control()
             if self.control.key in {"\x1b", "q", "Q"}:
-                self.exit_program = True
+                self.ask_quit_game()
                 return
             if self.control.dx or self.control.dy:
                 dxy = [self.control.dx, self.control.dy]
@@ -1997,7 +2474,10 @@ class GameEngine:
                     self.obj_num = self.room.num_objs + 1
                     self.cycle_last_ms = now_ms - self.game_cycle_ms
                     self.world.inv.play_flag = True
+                    self._standby_blink_visible = True
             return
+
+        self._standby_blink_visible = True
 
         max_lag_ms = self.game_cycle_ms * self.MAX_TICK_CATCHUP
         if now_ms - self.cycle_last_ms > max_lag_ms:

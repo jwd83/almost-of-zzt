@@ -225,8 +225,8 @@ class OOPRunner:
                 return (dy, -dx), j
             if tok == "RNDP":
                 if self.engine.random.randrange(2) == 0:
-                    return (-dx, dy), j
-                return (dx, -dy), j
+                    return (-dy, dx), j
+                return (dy, -dx), j
             return (-dx, -dy), j
 
         return None, idx + 1

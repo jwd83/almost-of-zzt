@@ -20,6 +20,15 @@ class InfoDef:
     touch: str = "touch_nothing"
     score: int = 0
     descr: str = ""
+    category: int = 0
+    key_code: str = ""
+    heading: str = ""
+    msg_intel: str = ""
+    msg_rate: str = ""
+    msg_rate_h: str = ""
+    msg_room: str = ""
+    msg_dir: str = ""
+    msg_scroll: str = ""
 
 
 def _make_table() -> list[InfoDef]:
@@ -280,5 +289,65 @@ def init_info_play() -> list[InfoDef]:
     )
     seti(c.SPECIAL, update="upd_special")
     seti(c.BOUND, touch="touch_bound")
+
+    return info
+
+
+def init_info_edit() -> list[InfoDef]:
+    info = init_info_play()
+
+    def sete(kind: int, **kwargs: object) -> None:
+        entry = info[kind]
+        for key, value in kwargs.items():
+            setattr(entry, key, value)
+
+    item = c.C_ITEM
+    creature = c.C_CREATURE
+    terrain = c.C_TERRAIN
+
+    for kind in range(c.NUM_CLASSES + 1):
+        sete(kind, category=terrain, heading=info[kind].descr or "Element")
+
+    for kind in (
+        c.AMMO,
+        c.TORCH,
+        c.GEM,
+        c.AKEY,
+        c.DOOR,
+        c.SCROLL,
+        c.PASSAGE,
+        c.DUPER,
+        c.BOMB,
+        c.ENERGIZER,
+    ):
+        sete(kind, category=item)
+
+    for kind in (
+        c.ENEMY,
+        c.S_ENEMY,
+        c.CENTI_H,
+        c.CENTI,
+        c.WANDERER,
+        c.CHASER,
+        c.SLIME,
+        c.SHARK,
+        c.SHOOTER,
+        c.PUSHER,
+        c.PROG,
+    ):
+        sete(kind, category=creature)
+
+    sete(c.PASSAGE, msg_room="Destination board")
+    sete(c.BOMB, msg_intel="Countdown")
+    sete(c.SHOOTER, msg_intel="Firing type", msg_rate="Firing rate")
+    sete(c.DUPER, msg_rate="Duplication speed", msg_rate_h="Duplication speed")
+    sete(c.BLINK_WALL, msg_rate="Blink delay", msg_dir="Direction")
+    sete(c.XPORTER, msg_dir="Direction")
+    sete(c.PUSHER, msg_dir="Direction")
+    sete(c.CENTI_H, msg_intel="Segment length", msg_dir="Direction")
+    sete(c.CENTI, msg_dir="Direction")
+    sete(c.PROG, msg_intel="Character", msg_rate="Cycle", msg_scroll="Program")
+    sete(c.SCROLL, msg_scroll="Text")
+    sete(c.PASSAGE, msg_intel="Passage color")
 
     return info
