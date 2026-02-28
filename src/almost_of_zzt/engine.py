@@ -69,12 +69,8 @@ class GameEngine:
         self.move_queue: deque[tuple[int, int, bool]] = deque()
         self.bot_msg_ticks = 0
         self._screen: pygame.Surface | None = None
-        self._framebuffer: pygame.Surface | None = None
         self._renderer: Renderer | None = None
         self._clock: pygame.time.Clock | None = None
-        self._present_rect = pygame.Rect(0, 0, c.SCREEN_W, c.SCREEN_H)
-        self._present_surface: pygame.Surface | None = None
-        self._fullscreen = False
 
         self.sound_enabled = True
         self.sound = snd.SoundEngine(self.random)
@@ -196,69 +192,6 @@ class GameEngine:
         self.play_mode = mode
         p = self.player
         self.room.board[p.x][p.y] = BoardCell(mode, self.info[mode].col)
-
-    def _update_present_geometry(self) -> None:
-        if self._screen is None:
-            return
-
-        sw, sh = self._screen.get_size()
-        scale = min(sw / c.SCREEN_W, sh / c.SCREEN_H)
-        out_w = max(1, int(c.SCREEN_W * scale))
-        out_h = max(1, int(c.SCREEN_H * scale))
-        x = (sw - out_w) // 2
-        y = (sh - out_h) // 2
-        self._present_rect = pygame.Rect(x, y, out_w, out_h)
-
-        if (out_w, out_h) == (c.SCREEN_W, c.SCREEN_H):
-            self._present_surface = None
-        elif self._present_surface is None or self._present_surface.get_size() != (out_w, out_h):
-            self._present_surface = pygame.Surface((out_w, out_h)).convert()
-
-    def _set_display_mode(self) -> bool:
-        if not pygame.get_init():
-            return False
-        flags = pygame.FULLSCREEN if self._fullscreen else 0
-        size = (0, 0) if self._fullscreen else (c.SCREEN_W, c.SCREEN_H)
-        try:
-            self._screen = pygame.display.set_mode(size, flags)
-        except pygame.error:
-            return False
-
-        if self._framebuffer is None or self._framebuffer.get_size() != (c.SCREEN_W, c.SCREEN_H):
-            self._framebuffer = pygame.Surface((c.SCREEN_W, c.SCREEN_H)).convert()
-
-        if self._renderer is None:
-            self._renderer = Renderer(self._framebuffer)
-        else:
-            self._renderer.screen = self._framebuffer
-            self._renderer.glyph_cache.clear()
-
-        self._update_present_geometry()
-        return True
-
-    def _toggle_fullscreen(self) -> bool:
-        target = not self._fullscreen
-        self._fullscreen = target
-        if self._set_display_mode():
-            return True
-        self._fullscreen = not target
-        self._set_display_mode()
-        return False
-
-    def _present(self) -> None:
-        if self._screen is None or self._framebuffer is None:
-            return
-
-        if self._present_rect.topleft == (0, 0) and self._present_rect.size == self._screen.get_size():
-            self._screen.blit(self._framebuffer, (0, 0))
-        else:
-            if self._present_surface is None or self._present_surface.get_size() != self._present_rect.size:
-                self._present_surface = pygame.Surface(self._present_rect.size).convert()
-            pygame.transform.scale(self._framebuffer, self._present_rect.size, self._present_surface)
-            self._screen.fill((0, 0, 0))
-            self._screen.blit(self._present_surface, self._present_rect.topleft)
-
-        pygame.display.flip()
 
     def _select_game_file(self, ext: str, title: str) -> Path | None:
         files = sorted(Path.cwd().glob(f"*{ext}"), key=lambda p: p.name.lower())
@@ -429,7 +362,7 @@ class GameEngine:
             self._renderer.draw_text(1, c.YS - 2, (" " + prompt)[: c.XS], 0x1F)
             shown = name if len(name) <= c.XS - 3 else name[-(c.XS - 3) :]
             self._renderer.draw_text(1, c.YS - 1, ("> " + shown + "_")[: c.XS], 0x1E)
-            self._present()
+            pygame.display.flip()
             self._ui_wait(clock)
 
         return ""
@@ -467,7 +400,7 @@ class GameEngine:
             self._renderer.draw_text(1, c.YS - 2, (" " + prompt)[: c.XS], 0x1F)
             shown = value if len(value) <= c.XS - 3 else value[-(c.XS - 3) :]
             self._renderer.draw_text(1, c.YS - 1, ("> " + shown + "_")[: c.XS], 0x1E)
-            self._present()
+            pygame.display.flip()
             self._ui_wait(clock)
         return None
 
@@ -506,7 +439,7 @@ class GameEngine:
             no_attr = 0x1C if cur == 1 else 0x1E
             self._renderer.draw_text(2, c.YS - 1, " Yes ", yes_attr)
             self._renderer.draw_text(8, c.YS - 1, " No ", no_attr)
-            self._present()
+            pygame.display.flip()
             self._ui_wait(clock)
         return default
 
@@ -562,7 +495,7 @@ class GameEngine:
             self._renderer.draw_text(2, c.YS - 2, prompt[: c.XS - 2], 0x1F)
             rendered = "  ".join(f"[{cname}]" if i == cur else cname for i, cname in enumerate(choices))
             self._renderer.draw_text(2, c.YS - 1, rendered[: c.XS - 2], 0x1E)
-            self._present()
+            pygame.display.flip()
             self._ui_wait(clock)
         return cur
 
@@ -595,7 +528,7 @@ class GameEngine:
             self._draw_panel(self._renderer)
             self._renderer.draw_text(2, c.YS - 2, prompt[: c.XS - 2], 0x1F)
             self._renderer.draw_text(2, c.YS - 1, "Use an arrow key", 0x1E)
-            self._present()
+            pygame.display.flip()
             self._ui_wait(clock)
         return (0, -1)
 
@@ -740,11 +673,11 @@ class GameEngine:
             self._renderer.draw_glyph(x - 1, y - 1, 0xB1, 0x08 + (idx % 7))
             if (idx % 120) == 0:
                 self._service_sound()
-                self._present()
+                pygame.display.flip()
         self._renderer.clear()
         self._draw_board(self._renderer)
         self._draw_panel(self._renderer)
-        self._present()
+        pygame.display.flip()
 
     def _handle_monitor_key(self, key: str) -> None:
         key_u = key.upper()
@@ -784,14 +717,6 @@ class GameEngine:
             self.speed = 1 if self.speed >= 9 else self.speed + 1
             self.game_cycle_ms = self.speed * 20
             self.put_bot_msg(120, f"Game speed: {self.speed}")
-            return
-
-        if key_u == "F":
-            if self._toggle_fullscreen():
-                mode = "Fullscreen" if self._fullscreen else "Windowed"
-                self.put_bot_msg(120, f"{mode} mode")
-            else:
-                self.put_bot_msg(120, "Fullscreen toggle unavailable.")
             return
 
         if key_u == "E":
@@ -2158,9 +2083,6 @@ class GameEngine:
             renderer.draw_text(64, 17, "High Scores", 0x1E)
             renderer.draw_text(61, 21, " S ", 0x70)
             renderer.draw_text(64, 21, f"Game speed: {self.speed}", 0x1F)
-            renderer.draw_text(61, 22, " F ", 0x30)
-            fullscreen_text = "Windowed mode" if self._fullscreen else "Fullscreen"
-            renderer.draw_text(64, 22, fullscreen_text, 0x1E)
 
             msg = self.room.room_info.bot_msg
             if msg:
@@ -2345,7 +2267,7 @@ class GameEngine:
             self._draw_board(self._renderer)
             self._draw_panel(self._renderer)
             self._draw_scroll_overlay(self._renderer, title, entries, cur, obj_flag)
-            self._present()
+            pygame.display.flip()
             self._ui_wait(clock)
 
         self.key_buffer.clear()
@@ -2518,7 +2440,7 @@ class GameEngine:
             self._draw_board(self._renderer)
             self._draw_panel(self._renderer)
             self._draw_edit_scroll_overlay(self._renderer, title, state)
-            self._present()
+            pygame.display.flip()
             self._ui_wait(clock)
 
         self.key_buffer.clear()
@@ -2656,11 +2578,8 @@ class GameEngine:
         self.sound.bind_pygame()
         self.sound.set_enabled(self.sound_enabled)
         pygame.display.set_caption("almost-of-zzt")
-        if not self._set_display_mode():
-            self._screen = pygame.display.set_mode((c.SCREEN_W, c.SCREEN_H))
-            self._framebuffer = pygame.Surface((c.SCREEN_W, c.SCREEN_H)).convert()
-            self._renderer = Renderer(self._framebuffer)
-            self._update_present_geometry()
+        self._screen = pygame.display.set_mode((c.SCREEN_W, c.SCREEN_H))
+        self._renderer = Renderer(self._screen)
         self._clock = pygame.time.Clock()
 
         if self.play_mode == c.PLAYER:
@@ -2676,13 +2595,11 @@ class GameEngine:
             self._renderer.clear()
             self._draw_board(self._renderer)
             self._draw_panel(self._renderer)
-            self._present()
+            pygame.display.flip()
             self._clock.tick(self.TARGET_RENDER_FPS)
 
         self.sound.shutdown()
         pygame.quit()
         self._screen = None
-        self._framebuffer = None
         self._renderer = None
         self._clock = None
-        self._present_surface = None

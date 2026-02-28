@@ -177,23 +177,6 @@ def test_monitor_e_key_enters_editor(monkeypatch) -> None:
     assert calls == ["edit"]
 
 
-def test_monitor_f_key_toggles_fullscreen() -> None:
-    e = _engine()
-    messages: list[str] = []
-
-    def fake_toggle() -> bool:
-        e._fullscreen = not e._fullscreen
-        return True
-
-    e._toggle_fullscreen = fake_toggle  # type: ignore[method-assign]
-    e.put_bot_msg = lambda duration, msg: messages.append(msg)  # type: ignore[method-assign]
-
-    e._handle_monitor_key("F")
-    e._handle_monitor_key("f")
-
-    assert messages == ["Fullscreen mode", "Windowed mode"]
-
-
 def test_editor_save_and_world_reload_round_trip(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     e = _engine()
