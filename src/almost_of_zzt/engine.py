@@ -13,6 +13,7 @@ from .info import InfoDef, init_info_play
 from .model import BoardCell, Obj, Room, RoomInfo, make_default_room, make_new_world
 from .oop import OOPRunner
 from .render import Renderer
+from . import sound as snd
 from .world import load_world, save_world
 
 
@@ -72,6 +73,8 @@ class GameEngine:
         self._clock: pygame.time.Clock | None = None
 
         self.sound_enabled = True
+        self.sound = snd.SoundEngine(self.random)
+        self.sound.set_enabled(self.sound_enabled)
         self.first_thru = True
         self.play_mode = c.PLAYER
         self._standby_blink_visible = True
@@ -103,6 +106,26 @@ class GameEngine:
     @property
     def player(self) -> Obj:
         return self.room.objs[0]
+
+    def sound_add(self, priority: int, seq: bytes) -> None:
+        self.sound.add(priority, seq)
+
+    def sound_music(self, spec: str) -> bytes:
+        return self.sound.music(spec)
+
+    def sound_stop(self) -> None:
+        self.sound.stop()
+
+    def _service_sound(self, now_ms: int | None = None) -> None:
+        if now_ms is None:
+            if not pygame.get_init():
+                return
+            now_ms = pygame.time.get_ticks()
+        self.sound.tick(now_ms)
+
+    def _ui_wait(self, clock: pygame.time.Clock, fps: int = 30) -> None:
+        self._service_sound()
+        clock.tick(fps)
 
     def _build_demo_world(self) -> None:
         title = make_default_room()
@@ -340,7 +363,7 @@ class GameEngine:
             shown = name if len(name) <= c.XS - 3 else name[-(c.XS - 3) :]
             self._renderer.draw_text(1, c.YS - 1, ("> " + shown + "_")[: c.XS], 0x1E)
             pygame.display.flip()
-            clock.tick(30)
+            self._ui_wait(clock)
 
         return ""
 
@@ -378,7 +401,7 @@ class GameEngine:
             shown = value if len(value) <= c.XS - 3 else value[-(c.XS - 3) :]
             self._renderer.draw_text(1, c.YS - 1, ("> " + shown + "_")[: c.XS], 0x1E)
             pygame.display.flip()
-            clock.tick(30)
+            self._ui_wait(clock)
         return None
 
     def in_yn(self, prompt: str, default: bool = False) -> bool:
@@ -417,7 +440,7 @@ class GameEngine:
             self._renderer.draw_text(2, c.YS - 1, " Yes ", yes_attr)
             self._renderer.draw_text(8, c.YS - 1, " No ", no_attr)
             pygame.display.flip()
-            clock.tick(30)
+            self._ui_wait(clock)
         return default
 
     def in_string(self, x: int, y: int, max_len: int, prompt: str = "Input:", initial: str = "") -> str | None:
@@ -473,7 +496,7 @@ class GameEngine:
             rendered = "  ".join(f"[{cname}]" if i == cur else cname for i, cname in enumerate(choices))
             self._renderer.draw_text(2, c.YS - 1, rendered[: c.XS - 2], 0x1E)
             pygame.display.flip()
-            clock.tick(30)
+            self._ui_wait(clock)
         return cur
 
     def in_dir(self, y: int, prompt: str) -> tuple[int, int]:
@@ -506,7 +529,7 @@ class GameEngine:
             self._renderer.draw_text(2, c.YS - 2, prompt[: c.XS - 2], 0x1F)
             self._renderer.draw_text(2, c.YS - 1, "Use an arrow key", 0x1E)
             pygame.display.flip()
-            clock.tick(30)
+            self._ui_wait(clock)
         return (0, -1)
 
     def in_fancy(self, prompt: str) -> str:
@@ -539,6 +562,7 @@ class GameEngine:
         if self.play_mode != c.PLAYER or self._death_score_noted:
             return
         self._death_score_noted = True
+        self.sound_stop()
 
         self._load_hi_scores()
         self._note_score(self.world.inv.score)
@@ -560,6 +584,7 @@ class GameEngine:
             return True
         if not self.in_yn("Quit current game?", default=False):
             return False
+        self.sound_stop()
         self.entry_room = self.world.inv.room
         if 0 <= 0 <= self.world.num_rooms:
             self.change_room(0)
@@ -578,6 +603,7 @@ class GameEngine:
         cmd = text.strip()
         if not cmd:
             return
+        self.sound_add(10, snd.SFX_SECRET_CMD)
 
         ucmd = cmd.upper()
         if ucmd.startswith("+") and len(ucmd) > 1:
@@ -646,6 +672,7 @@ class GameEngine:
         for idx, (x, y) in enumerate(cells):
             self._renderer.draw_glyph(x - 1, y - 1, 0xB1, 0x08 + (idx % 7))
             if (idx % 120) == 0:
+                self._service_sound()
                 pygame.display.flip()
         self._renderer.clear()
         self._draw_board(self._renderer)
@@ -871,15 +898,26 @@ class GameEngine:
                     self.world.inv.strength = 0
                 self.put_bot_msg(100, "Ouch!")
                 if self.world.inv.strength > 0 and self.room.room_info.re_enter:
+                    self.sound_add(4, snd.SFX_PLAYER_REENTER)
                     p = self.player
                     self.room.board[p.x][p.y] = BoardCell(c.EMPTY, 0)
                     p.x = self.room.room_info.start_x
                     p.y = self.room.room_info.start_y
                     self.room.board[p.x][p.y] = BoardCell(c.PLAYER, self.info[c.PLAYER].col)
                     self.standby = True
+                if self.world.inv.strength > 0:
+                    self.sound_add(4, snd.SFX_PLAYER_HURT)
+                else:
+                    self.sound_add(5, snd.SFX_PLAYER_DIE)
             return
 
         if 0 < obj_idx < len(self.room.objs):
+            obj = self.room.objs[obj_idx]
+            kind = self.room.board[obj.x][obj.y].kind
+            if kind == c.BULLET:
+                self.sound_add(3, snd.SFX_ZAP_BULLET)
+            elif kind != c.PROG:
+                self.sound_add(3, snd.SFX_ZAP_ENEMY)
             self.kill_obj(obj_idx)
 
     def zap(self, x: int, y: int) -> None:
@@ -900,6 +938,7 @@ class GameEngine:
             self.world.inv.score += self.info[self.room.board[self.room.objs[obj_idx].x][self.room.objs[obj_idx].y].kind].score
         else:
             self.zap(x, y)
+            self.sound_add(2, snd.SFX_SHOT_HIT)
 
     def try_fire(self, kind: int, x: int, y: int, dx: int, dy: int, who: int) -> bool:
         target = self.room.board[x + dx][y + dy]
@@ -919,6 +958,7 @@ class GameEngine:
             self.info[tkind].killable and bool(who) == (tkind == c.PLAYER) and self.world.inv.ener_time <= 0
         ):
             self.zap(x + dx, y + dy)
+            self.sound_add(2, snd.SFX_SHOT_HIT)
             return True
         return False
 
@@ -954,6 +994,7 @@ class GameEngine:
             self.player.y = dest_y
 
         self.standby = True
+        self.sound_add(4, snd.SFX_PASSAGE)
         self.note_enter_new_room()
         if self.world.inv.room != old_room:
             self.counter = self.random.randrange(100)
@@ -1028,6 +1069,7 @@ class GameEngine:
 
         if dest_x != -1:
             self.move_to(src_x, src_y, dest_x, dest_y)
+            self.sound_add(3, snd.SFX_XPORT)
 
     def push(self, x: int, y: int, dx: int, dy: int) -> None:
         kind = self.room.board[x][y].kind
@@ -1081,6 +1123,7 @@ class GameEngine:
         if obj.intel == 0:
             obj.intel = 9
             self.put_bot_msg(200, "Bomb activated!")
+            self.sound_add(4, snd.SFX_BOMB_ARM)
         else:
             self.push(x, y, dir_xy[0], dir_xy[1])
 
@@ -1092,6 +1135,7 @@ class GameEngine:
     def touch_energizer(self, x: int, y: int, p: int, dir_xy: list[int]) -> None:
         self.room.board[x][y].kind = c.EMPTY
         self.world.inv.ener_time = c.ENER_LIFE
+        self.sound_add(9, snd.SFX_ENERGIZER)
         if self.world.first.touch_ener:
             self.put_bot_msg(200, "Energizer - You are invincible")
             self.world.first.touch_ener = False
@@ -1107,14 +1151,17 @@ class GameEngine:
         d = min(max(d, 1), 7)
         if self.world.inv.keys[d - 1]:
             self.put_bot_msg(200, f"You already have a {c.COLORS[d]} key!")
+            self.sound_add(2, snd.SFX_KEY_ALREADY)
         else:
             self.world.inv.keys[d - 1] = True
             self.room.board[x][y].kind = c.EMPTY
             self.put_bot_msg(200, f"You now have the {c.COLORS[d]} key.")
+            self.sound_add(2, snd.SFX_KEY_GET)
 
     def touch_ammo(self, x: int, y: int, p: int, dir_xy: list[int]) -> None:
         self.world.inv.ammo += 5
         self.room.board[x][y].kind = c.EMPTY
+        self.sound_add(2, snd.SFX_AMMO_GET)
         if self.world.first.got_ammo:
             self.world.first.got_ammo = False
             self.put_bot_msg(200, "Ammunition - 5 shots per container.")
@@ -1124,6 +1171,7 @@ class GameEngine:
         self.world.inv.strength += 1
         self.world.inv.score += 10
         self.room.board[x][y].kind = c.EMPTY
+        self.sound_add(2, snd.SFX_GEM_GET)
         if self.world.first.got_gem:
             self.world.first.got_gem = False
             self.put_bot_msg(200, "Gems give you Health!")
@@ -1140,25 +1188,31 @@ class GameEngine:
             self.room.board[x][y].kind = c.EMPTY
             self.world.inv.keys[d - 1] = False
             self.put_bot_msg(200, f"The {c.COLORS[d]} door is now open.")
+            self.sound_add(3, snd.SFX_DOOR_OPEN)
         else:
             self.put_bot_msg(200, f"The {c.COLORS[d]} door is locked!")
+            self.sound_add(3, snd.SFX_DOOR_LOCKED)
 
     def touch_push(self, x: int, y: int, p: int, dir_xy: list[int]) -> None:
         self.push(x, y, dir_xy[0], dir_xy[1])
+        self.sound_add(2, snd.SFX_PUSH)
 
     def touch_torch(self, x: int, y: int, p: int, dir_xy: list[int]) -> None:
         self.world.inv.torches += 1
         self.room.board[x][y].kind = c.EMPTY
+        self.sound_add(3, snd.SFX_TORCH_GET)
         if self.world.first.got_torch:
             self.put_bot_msg(200, "Torch - used for lighting in the underground.")
             self.world.first.got_torch = False
 
     def touch_inviso_wall(self, x: int, y: int, p: int, dir_xy: list[int]) -> None:
         self.room.board[x][y].kind = c.NORM_WALL
+        self.sound_add(3, snd.SFX_INVISO)
         self.put_bot_msg(100, "You are blocked by an invisible wall.")
 
     def touch_brush(self, x: int, y: int, p: int, dir_xy: list[int]) -> None:
         self.room.board[x][y].kind = c.EMPTY
+        self.sound_add(3, snd.SFX_BRUSH)
         if self.world.first.make_path:
             self.world.first.make_path = False
             self.put_bot_msg(200, "A path is cleared through the forest.")
@@ -1206,6 +1260,7 @@ class GameEngine:
             self.change_room(old_room)
 
     def touch_water(self, x: int, y: int, p: int, dir_xy: list[int]) -> None:
+        self.sound_add(3, snd.SFX_WATER_BLOCK)
         self.put_bot_msg(100, "Your way is blocked by water.")
 
     def touch_slime(self, x: int, y: int, p: int, dir_xy: list[int]) -> None:
@@ -1215,10 +1270,12 @@ class GameEngine:
             self.zap_obj(idx)
         self.room.board[x][y].kind = c.BREAK_WALL
         self.room.board[x][y].color = temp_color
+        self.sound_add(2, snd.SFX_SLIME_TOUCH)
 
     def touch_scroll(self, x: int, y: int, p: int, dir_xy: list[int]) -> None:
         idx = self.obj_at(x, y)
         if idx > 0:
+            self.sound_add(2, self.sound_music("c-c+d-d+e-e+f-f+g-g"))
             self.room.objs[idx].offset = 0
             self.oop.exec_obj(idx, "Scroll")
         idx2 = self.obj_at(x, y)
@@ -1438,6 +1495,7 @@ class GameEngine:
             if temp_kind == c.RICOCHET and first_ric:
                 obj.xd = -obj.xd
                 obj.yd = -obj.yd
+                self.sound_add(1, snd.SFX_BULLET_RICOCHET)
                 first_ric = False
                 continue
 
@@ -1453,6 +1511,7 @@ class GameEngine:
                 old = obj.xd
                 obj.xd = -obj.yd
                 obj.yd = -old
+                self.sound_add(1, snd.SFX_BULLET_RICOCHET)
                 first_ric = False
                 continue
 
@@ -1460,6 +1519,7 @@ class GameEngine:
                 old = obj.xd
                 obj.xd = obj.yd
                 obj.yd = old
+                self.sound_add(1, snd.SFX_BULLET_RICOCHET)
                 first_ric = False
                 continue
 
@@ -1554,11 +1614,16 @@ class GameEngine:
         if obj.intel > 0:
             obj.intel -= 1
             if obj.intel == 1:
+                self.sound_add(1, snd.SFX_BOMB_DETONATE)
                 self.do_area(obj.x, obj.y, 1)
             elif obj.intel == 0:
                 tx, ty = obj.x, obj.y
                 self.kill_obj(n)
                 self.do_area(tx, ty, 2)
+            elif (obj.intel % 2) == 0:
+                self.sound_add(1, snd.SFX_BOMB_TICK_EVEN)
+            else:
+                self.sound_add(1, snd.SFX_BOMB_TICK_ODD)
 
     def upd_xporter(self, n: int) -> None:
         return
@@ -1677,6 +1742,9 @@ class GameEngine:
                         )
                 elif temp_obj != 0:
                     self.room.board[dst_x][dst_y] = copy.deepcopy(self.room.board[src_x][src_y])
+                self.sound_add(3, snd.SFX_DUPER_OK)
+            else:
+                self.sound_add(3, snd.SFX_DUPER_FAIL)
 
         obj.cycle = (9 - obj.rate) * 3
 
@@ -1694,6 +1762,7 @@ class GameEngine:
         obj2 = self.room.objs[n2]
         if self.info[self.room.board[obj2.x + obj2.xd][obj2.y + obj2.yd].kind].go_thru:
             self.move_obj(n2, obj2.x + obj2.xd, obj2.y + obj2.yd)
+            self.sound_add(2, snd.SFX_PUSH)
             if self.room.board[obj2.x - obj2.xd * 2][obj2.y - obj2.yd * 2].kind == c.PUSHER:
                 temp_obj = self.obj_at(obj2.x - obj2.xd * 2, obj2.y - obj2.yd * 2)
                 if temp_obj >= 0:
@@ -1738,6 +1807,7 @@ class GameEngine:
                             d += 1
                     if d < self.room.room_info.can_shoot and self.try_fire(c.BULLET, p.x, p.y, self.control.dx, self.control.dy, 0):
                         self.world.inv.ammo -= 1
+                        self.sound_add(2, snd.SFX_PLAYER_SHOOT)
                         self.control.dx = 0
                         self.control.dy = 0
         elif self.control.dx or self.control.dy:
@@ -1770,6 +1840,8 @@ class GameEngine:
                 self.standby = True
         elif key == "B":
             self.sound_enabled = not self.sound_enabled
+            self.sound.set_enabled(self.sound_enabled)
+            self.sound_stop()
         elif key == "H":
             self.put_bot_msg(200, "Help docs: ref/HELP/GAME.HLP")
 
@@ -1777,16 +1849,20 @@ class GameEngine:
             self.world.inv.torch_time -= 1
             if self.world.inv.torch_time <= 0:
                 self.do_area(p.x, p.y, 0)
+                self.sound_add(3, snd.SFX_TORCH_OUT)
 
         if self.world.inv.ener_time > 0:
             self.world.inv.ener_time -= 1
-            if self.world.inv.ener_time <= 0:
+            if self.world.inv.ener_time == 10:
+                self.sound_add(9, snd.SFX_ENERGIZER_WARN)
+            elif self.world.inv.ener_time <= 0:
                 self.room.board[p.x][p.y].color = self.info[c.PLAYER].col
 
         if self.room.room_info.time_limit > 0 and self.world.inv.strength > 0:
             self.world.inv.room_time += 1
             if self.world.inv.room_time == (self.room.room_info.time_limit - 10):
                 self.put_bot_msg(200, "Running out of time!")
+                self.sound_add(3, snd.SFX_TIMELIMIT_WARN)
             elif self.world.inv.room_time > self.room.room_info.time_limit:
                 self.zap_obj(0)
 
@@ -2192,7 +2268,7 @@ class GameEngine:
             self._draw_panel(self._renderer)
             self._draw_scroll_overlay(self._renderer, title, entries, cur, obj_flag)
             pygame.display.flip()
-            clock.tick(30)
+            self._ui_wait(clock)
 
         self.key_buffer.clear()
         self.move_queue.clear()
@@ -2365,7 +2441,7 @@ class GameEngine:
             self._draw_panel(self._renderer)
             self._draw_edit_scroll_overlay(self._renderer, title, state)
             pygame.display.flip()
-            clock.tick(30)
+            self._ui_wait(clock)
 
         self.key_buffer.clear()
         self.move_queue.clear()
@@ -2440,6 +2516,7 @@ class GameEngine:
             self.obj_num += 1
 
     def _tick_game(self, now_ms: int) -> None:
+        self._service_sound(now_ms)
         if self.play_mode == c.PLAYER and self.world.inv.strength <= 0:
             self._handle_player_death()
             return
@@ -2496,7 +2573,10 @@ class GameEngine:
                 self.counter = 1
 
     def run(self) -> None:
+        pygame.mixer.pre_init(44100, -16, 1, 512)
         pygame.init()
+        self.sound.bind_pygame()
+        self.sound.set_enabled(self.sound_enabled)
         pygame.display.set_caption("almost-of-zzt")
         self._screen = pygame.display.set_mode((c.SCREEN_W, c.SCREEN_H))
         self._renderer = Renderer(self._screen)
@@ -2518,6 +2598,7 @@ class GameEngine:
             pygame.display.flip()
             self._clock.tick(self.TARGET_RENDER_FPS)
 
+        self.sound.shutdown()
         pygame.quit()
         self._screen = None
         self._renderer = None

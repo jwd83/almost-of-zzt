@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from . import constants as c
+from . import sound as snd
 from .model import BoardCell
 
 if TYPE_CHECKING:
@@ -453,7 +454,8 @@ class OOPRunner:
         if cmd == "SHOOT":
             d, j = self._note_dir(obj_idx, tokens, idx)
             if d is not None:
-                self.engine.try_fire(c.BULLET, obj.x, obj.y, d[0], d[1], 1)
+                if self.engine.try_fire(c.BULLET, obj.x, obj.y, d[0], d[1], 1):
+                    self.engine.sound_add(2, snd.SFX_OOP_SHOOT)
             return True, False, False, j, False, None
 
         if cmd == "THROWSTAR":
@@ -573,6 +575,9 @@ class OOPRunner:
             return False, False, False, idx, False, None
 
         if cmd == "PLAY":
+            music = self.engine.sound_music("".join(tokens[idx:]))
+            if music:
+                self.engine.sound_add(-1, music)
             return False, False, False, len(tokens), False, None
 
         if cmd == "CYCLE":
@@ -606,6 +611,7 @@ class OOPRunner:
         if ":" not in cmd:
             room.objs[obj_idx].offset = -1
             self.engine.put_bot_msg(200, f"ERR: Bad command {cmd}")
+            self.engine.sound_add(5, snd.SFX_OOP_ERROR)
             return False, False, True, idx, False, None
         return False, False, False, idx, False, None
 
