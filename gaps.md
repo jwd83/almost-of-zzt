@@ -12,7 +12,7 @@ This file tracks behavior where the Python port currently differs from, or infer
 
 ## Known parity gaps
 
-- ZZT-OOP interpreter is partial; many commands and edge cases are missing or simplified.
+- ZZT-OOP interpreter now supports core command flow (`#IF`, direction modifiers, `#GO/#TRY/#WALK`, `#PUT/#CHANGE/#BECOME`, `#GIVE/#TAKE`, `#SEND/#ZAP/#RESTORE`, `#LOCK/#UNLOCK`, `#CHAR/#CYCLE`, `#DIE/#END/#RESTART/#ENDGAME`) but still lacks full scroll UI behavior and exact error/offset edge-case handling.
 - Blink wall, centipede, duplicator, conveyor, and transporter interactions are implemented but not fully cycle-accurate.
 - Dark-room redraw behavior is approximated by full-frame redraw, not Pascal incremental redraw.
 - Bottom message lifecycle uses a simplified timer, not special object slot semantics.
