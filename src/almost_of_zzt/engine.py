@@ -71,6 +71,7 @@ class GameEngine:
         self._screen: pygame.Surface | None = None
         self._renderer: Renderer | None = None
         self._clock: pygame.time.Clock | None = None
+        self.fullscreen = False
 
         self.sound_enabled = True
         self.sound = snd.SoundEngine(self.random)
@@ -192,6 +193,18 @@ class GameEngine:
         self.play_mode = mode
         p = self.player
         self.room.board[p.x][p.y] = BoardCell(mode, self.info[mode].col)
+
+    def _apply_display_mode(self) -> None:
+        if not pygame.get_init() or not pygame.display.get_init():
+            return
+        flags = pygame.SCALED
+        if self.fullscreen:
+            flags |= pygame.FULLSCREEN
+        self._screen = pygame.display.set_mode((c.SCREEN_W, c.SCREEN_H), flags)
+        if self._renderer is None:
+            self._renderer = Renderer(self._screen)
+        else:
+            self._renderer.screen = self._screen
 
     def _select_game_file(self, ext: str, title: str) -> Path | None:
         files = sorted(Path.cwd().glob(f"*{ext}"), key=lambda p: p.name.lower())
@@ -717,6 +730,13 @@ class GameEngine:
             self.speed = 1 if self.speed >= 9 else self.speed + 1
             self.game_cycle_ms = self.speed * 20
             self.put_bot_msg(120, f"Game speed: {self.speed}")
+            return
+
+        if key_u == "F":
+            self.fullscreen = not self.fullscreen
+            self._apply_display_mode()
+            mode = "Fullscreen" if self.fullscreen else "Windowed"
+            self.put_bot_msg(120, f"Display: {mode}")
             return
 
         if key_u == "E":
@@ -2578,8 +2598,7 @@ class GameEngine:
         self.sound.bind_pygame()
         self.sound.set_enabled(self.sound_enabled)
         pygame.display.set_caption("almost-of-zzt")
-        self._screen = pygame.display.set_mode((c.SCREEN_W, c.SCREEN_H))
-        self._renderer = Renderer(self._screen)
+        self._apply_display_mode()
         self._clock = pygame.time.Clock()
 
         if self.play_mode == c.PLAYER:

@@ -27,6 +27,7 @@ uv run almost-of-zzt path/to/WORLD.ZZT
 - `S` saves to `SAVED.SAV` in the current working directory.
 - Movement uses arrow keys (or keypad `8/2/4/6`), `Shift+direction` shoots.
 - Scroll/dialog windows use arrows for navigation, `Enter` to continue/select, `Esc` to close.
+- Press `F` at the title/main menu to toggle fullscreen scaled display.
 - If no world is provided, a small playable demo room is generated.
 
 ## Layout
