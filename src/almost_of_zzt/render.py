@@ -29,6 +29,7 @@ class Renderer:
 
     def _load_font(self) -> pygame.font.Font:
         font_candidates = (
+            "MxPlus_IBM_VGA_8x14.ttf",
             "AcPlus_IBM_VGA_8x14.ttf",
             "AcPlus_IBM_EGA_8x8.ttf",
             "APL386.ttf",
